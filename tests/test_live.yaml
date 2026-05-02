@@ -1,0 +1,6 @@
+sources:
+  - name: hn-frontpage
+    reader: rss
+    url: "https://hnrss.org/frontpage?count=3"
+    cache:
+      ttl: 60

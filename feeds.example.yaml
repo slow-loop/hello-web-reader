@@ -1,0 +1,80 @@
+# Example feeds config for web-reader
+# Usage:
+#   uv run web-reader feeds.yaml
+#   uv run web-reader feeds.yaml --tags=finance
+#   uv run web-reader feeds.yaml --tags=finance,tech --format=md
+
+sources:
+  - name: hn-frontpage
+    reader: rss
+    url: "https://hnrss.org/frontpage"
+    tags: [tech]
+    cache:
+      ttl: 3600
+
+  - name: r-investing
+    reader: reddit
+    tags: [finance, reddit]
+    params:
+      subreddit: investing
+      sort: hot
+      limit: 10
+    cache:
+      ttl: 1800
+
+  - name: r-stocks-top
+    reader: reddit
+    tags: [finance, reddit]
+    params:
+      subreddit: stocks
+      sort: top
+      time: week
+      limit: 15
+    cache:
+      ttl: 3600
+
+  - name: substack-transcript
+    reader: substack
+    tags: [finance]
+    params:
+      publication: thetranscript
+      limit: 5
+    cache:
+      ttl: 7200
+
+  - name: yt-ted
+    reader: youtube_channel
+    tags: [youtube]
+    params:
+      handle: "@TED"
+      limit: 3
+    cache:
+      ttl: 3600
+
+  # Apple Podcasts — Mac only, episodes must be downloaded locally
+  # Transcribes via Groq Whisper (requires GROQ_API_KEY in .env)
+  - name: podcast-backfill
+    reader: apple_podcast
+    tags: [podcast, transcript]
+    params:
+      podcast_title: "The Daily"        # exact show title; omit to fetch all shows
+      limit: 3                          # episodes per run (sorted by pub date desc)
+      # episode_uuids:                  # alternatively, pin specific episode UUIDs
+      #   - "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    cache:
+      ttl: 86400
+
+  # Yahoo Mail — credentials via .env (see .env.example)
+  - name: yahoo-email-inbox
+    reader: email
+    tags: [email]
+    params:
+      username: "${YAHOO_MAIL_USERNAME}"
+      password: "${YAHOO_MAIL_PASSWORD}"
+      imap_server: "imap.mail.yahoo.com"
+      folder: "INBOX"           # other folders: "Bulk Mail", "Custom Folder Name"
+      hours: 24                 # fetch emails from the last 24 hours
+      # senders:
+      #   - "newsletter@example.com"
+    cache:
+      ttl: 3600

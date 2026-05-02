@@ -1,0 +1,43 @@
+[project]
+name = "web-reader"
+version = "0.1.0"
+description = "Lightweight async web reader — URL in, clean text out."
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0",
+    "trafilatura>=2.0",
+    "feedparser>=6.0",
+    "markdownify>=0.14",
+    "sqlmodel>=0.0.22",
+    "pyyaml>=6.0",
+    "beautifulsoup4>=4.14.3",
+    "gnews>=0.4.3",
+    "googlenewsdecoder>=0.1.7",
+    "youtube-transcript-api>=1.0",
+    "yt-dlp>=2024.0",
+    "openai>=1.0",
+    "markitdown>=0.1",
+    "mcp>=1.26.0",
+    "platformdirs>=4.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+web-reader = "web_reader.cli:main"
+web-reader-mcp = "web_reader.mcp:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/web_reader"]
+
+[tool.pytest.ini_options]
+markers = [
+    "live: external network smoke tests",
+]
