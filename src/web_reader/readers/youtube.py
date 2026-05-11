@@ -365,7 +365,14 @@ async def transcribe_youtube(url: str) -> str:
                 model=model,
                 file=file,
                 response_format="text",
-                prompt="Transcribe the audio exactly as spoken. Original language. No translation. technical Chinese/English.",
+                language="zh",
+                temperature=0.0,
+                prompt=(
+                    "以下為繁體中文財經投資 Podcast 的逐字稿，內容包含台股、美股、"
+                    "總體經濟、產業趨勢、AI 與科技等討論，會自然夾雜英文公司名與"
+                    "專有名詞，例如 NVIDIA、Apple、Fed、ETF、GPU、AI。語氣口語化，"
+                    "常出現「對啊」「就是」「然後」「其實」「我覺得」等語助詞。"
+                ),
             )
         
         return str(transcription)

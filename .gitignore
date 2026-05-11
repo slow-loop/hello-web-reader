@@ -222,3 +222,5 @@ data/briefings
 
 # Personal feeds config (use feeds.example.yaml as template)
 feeds.yaml
+# Generated output
+output/
