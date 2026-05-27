@@ -27,6 +27,22 @@ World
     assert youtube._vtt_to_text(content) == "Hello\nWorld"
 
 
+def test_format_verbose_transcription_uses_segment_lines():
+    class DummyTranscription:
+        text = "This should not be returned as one blob"
+        segments = [
+            {"start": 0.0, "end": 0.76, "text": "美股實盤挑戰"},
+            {"start": 0.76, "end": 2.52, "text": "你覺得我可以從4000美金"},
+        ]
+
+    text = youtube._format_verbose_transcription(DummyTranscription())
+
+    assert text == (
+        "[00:00:00.000 --> 00:00:00.760] 美股實盤挑戰\n"
+        "[00:00:00.760 --> 00:00:02.520] 你覺得我可以從4000美金"
+    )
+
+
 @pytest.mark.asyncio
 async def test_read_youtube_prefers_ytdlp_subtitles(monkeypatch):
     monkeypatch.setattr(
@@ -63,7 +79,7 @@ async def test_read_youtube_fails_without_audio_fallback_when_ytdlp_has_no_subti
 async def test_read_youtube_falls_back_to_audio(monkeypatch):
     monkeypatch.setattr(youtube, "_download_ytdlp_subtitles", lambda url, video_id, languages: None)
 
-    async def fake_audio(url):
+    async def fake_audio(url, prompt=None):
         return "AI transcript text"
 
     monkeypatch.setattr(youtube, "transcribe_youtube", fake_audio)
@@ -74,6 +90,30 @@ async def test_read_youtube_falls_back_to_audio(monkeypatch):
     assert result.language == "ai-transcribed"
     assert result.raw["method"] == "ai-whisper"
     assert "AI transcript text" in result.text
+
+
+@pytest.mark.asyncio
+async def test_read_youtube_passes_transcription_prompt(monkeypatch):
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(youtube, "_download_ytdlp_subtitles", lambda url, video_id, languages: None)
+
+    async def fake_audio(url, prompt=None):
+        captured["url"] = url
+        captured["prompt"] = prompt
+        return "AI transcript text"
+
+    monkeypatch.setattr(youtube, "transcribe_youtube", fake_audio)
+
+    result = await youtube.read_youtube(
+        "https://www.youtube.com/watch?v=abc123",
+        transcription_prompt="中文投資影片逐字稿，保留原文。",
+    )
+
+    assert result.success is True
+    assert captured == {
+        "url": "https://www.youtube.com/watch?v=abc123",
+        "prompt": "中文投資影片逐字稿，保留原文。",
+    }
 
 
 def test_build_transcription_client_requires_groq(monkeypatch):
@@ -124,6 +164,7 @@ async def test_transcribe_youtube_disables_ytdlp_progress(monkeypatch):
 
     class DummyTranscriptions:
         def create(self, **kwargs):
+            captured["transcription_kwargs"] = kwargs
             return "AI transcript text"
 
     class DummyAudio:
@@ -150,3 +191,55 @@ async def test_transcribe_youtube_disables_ytdlp_progress(monkeypatch):
     assert text == "AI transcript text"
     assert captured["urls"] == ["https://www.youtube.com/watch?v=abc123"]
     assert captured["opts"]["noprogress"] is True
+    assert captured["transcription_kwargs"]["response_format"] == "verbose_json"
+    assert "prompt" not in captured["transcription_kwargs"]
+
+
+@pytest.mark.asyncio
+async def test_transcribe_youtube_accepts_optional_prompt(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class DummyYoutubeDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def download(self, urls):
+            pass
+
+    class DummyTranscriptions:
+        def create(self, **kwargs):
+            captured["transcription_kwargs"] = kwargs
+            return "AI transcript text"
+
+    class DummyAudio:
+        transcriptions = DummyTranscriptions()
+
+    class DummyClient:
+        audio = DummyAudio()
+
+    class DummyTempDir:
+        def __enter__(self):
+            return "/tmp/web-reader-test"
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(youtube.tempfile, "TemporaryDirectory", lambda: DummyTempDir())
+    monkeypatch.setattr(youtube.yt_dlp, "YoutubeDL", DummyYoutubeDL)
+    monkeypatch.setattr(youtube.os, "listdir", lambda path: ["audio.m4a"])
+    monkeypatch.setattr(youtube, "_build_transcription_client", lambda: (DummyClient(), "whisper-large-v3"))
+    monkeypatch.setattr("builtins.open", mock_open(read_data=b"audio-bytes"))
+
+    text = await youtube.transcribe_youtube(
+        "https://www.youtube.com/watch?v=abc123",
+        prompt="中文投資影片逐字稿，保留原文。",
+    )
+
+    assert text == "AI transcript text"
+    assert captured["transcription_kwargs"]["prompt"] == "中文投資影片逐字稿，保留原文。"

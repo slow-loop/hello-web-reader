@@ -31,7 +31,12 @@ def _print_results(results, output_format: str) -> None:
     print(format_results(results, output_format))
 
 
-async def _run_url(url: str, no_cache: bool, output_format: str) -> None:
+async def _run_url(
+    url: str,
+    no_cache: bool,
+    output_format: str,
+    youtube_prompt: str | None = None,
+) -> None:
     """Fetch a single URL."""
     from ._detect import detect_source_type
 
@@ -87,7 +92,7 @@ async def _run_url(url: str, no_cache: bool, output_format: str) -> None:
         result = await read_substack(url)
     elif source_type == "youtube":
         from .readers.youtube import read_youtube
-        result = await read_youtube(url)
+        result = await read_youtube(url, transcription_prompt=youtube_prompt)
     elif source_type == "rss":
         from .readers.rss import read_rss
         result = await read_rss(url)
@@ -123,6 +128,11 @@ def main():
     parser.add_argument("--tags", help="Filter config sources by tags (comma-separated)", default=None)
     parser.add_argument("--no-cache", action="store_true", help="Skip cache, always re-fetch")
     parser.add_argument("--format", choices=["json", "md"], default="md", help="Output format (default: md)")
+    parser.add_argument(
+        "--youtube-prompt",
+        default=None,
+        help="Optional Groq Whisper prompt for YouTube audio fallback. Defaults to no prompt.",
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
 
     args = parser.parse_args()
@@ -137,7 +147,7 @@ def main():
     if _is_config_file(args.target):
         asyncio.run(_run_config(args.target, tags, args.no_cache, args.format))
     else:
-        asyncio.run(_run_url(args.target, args.no_cache, args.format))
+        asyncio.run(_run_url(args.target, args.no_cache, args.format, args.youtube_prompt))
 
 
 if __name__ == "__main__":
