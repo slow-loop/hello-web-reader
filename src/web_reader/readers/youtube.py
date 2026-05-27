@@ -15,21 +15,11 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from openai import OpenAI
 import yt_dlp
 
 from ..models import ReadResult
 
 logger = logging.getLogger(__name__)
-
-
-def _build_transcription_client() -> tuple[OpenAI, str]:
-    groq_api_key = os.environ.get("GROQ_API_KEY")
-    if not groq_api_key:
-        raise ValueError("No GROQ_API_KEY found. Please set GROQ_API_KEY in your environment or .env file.")
-
-    client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_api_key)
-    return client, "whisper-large-v3-turbo"
 
 
 def _extract_video_id(url: str) -> Optional[str]:
@@ -327,16 +317,26 @@ async def list_channel_videos(channel_id_or_handle: str, limit: int = 5) -> list
     return results
 
 
-async def transcribe_youtube(url: str) -> str:
-    """Download audio and transcribe it using Whisper."""
+async def transcribe_youtube(url: str, context: str | None = None) -> str:
+    """Download YouTube audio and transcribe via the local ASR + LLM pipeline.
+
+    Stage 1: SenseVoice (local, via funasr).
+    Stage 2: OpenRouter LLM polishing (default `deepseek/deepseek-chat`,
+    override with `OPENROUTER_MODEL`; requires `OPENROUTER_API_KEY`).
+
+    Args:
+        url: YouTube video URL.
+        context: Optional short domain hint forwarded to the refinement LLM.
+    """
+    from ..transcribe import transcribe_audio
+
     video_id = _extract_video_id(url)
     if not video_id:
         raise ValueError("Invalid YouTube URL")
 
-    # 1. Setup temporary directory
     with tempfile.TemporaryDirectory() as temp_dir:
         audio_path_tmpl = os.path.join(temp_dir, "audio.%(ext)s")
-        
+
         ydl_opts = {
             "format": "worstaudio/worst",
             "outtmpl": audio_path_tmpl,
@@ -346,33 +346,12 @@ async def transcribe_youtube(url: str) -> str:
             "cookiefile": _cookiefile_path(),
         }
 
-        # 2. Download
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        # Find the actual file
         downloaded_files = os.listdir(temp_dir)
         if not downloaded_files:
             raise FileNotFoundError("Audio file was not downloaded successfully.")
-        
+
         audio_path = os.path.join(temp_dir, downloaded_files[0])
-
-        # 3. AI Transcription
-        client, model = _build_transcription_client()
-
-        with open(audio_path, "rb") as file:
-            transcription = client.audio.transcriptions.create(
-                model=model,
-                file=file,
-                response_format="text",
-                language="zh",
-                temperature=0.0,
-                prompt=(
-                    "以下為繁體中文財經投資 Podcast 的逐字稿，內容包含台股、美股、"
-                    "總體經濟、產業趨勢、AI 與科技等討論，會自然夾雜英文公司名與"
-                    "專有名詞，例如 NVIDIA、Apple、Fed、ETF、GPU、AI。語氣口語化，"
-                    "常出現「對啊」「就是」「然後」「其實」「我覺得」等語助詞。"
-                ),
-            )
-        
-        return str(transcription)
+        return transcribe_audio(audio_path, context=context)
