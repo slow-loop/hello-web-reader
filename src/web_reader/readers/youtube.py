@@ -321,7 +321,7 @@ async def transcribe_youtube(url: str, context: str | None = None) -> str:
     """Download YouTube audio and transcribe via the local ASR + LLM pipeline.
 
     Stage 1: SenseVoice (local, via funasr).
-    Stage 2: OpenRouter LLM polishing (default `deepseek/deepseek-chat`,
+    Stage 2: OpenRouter LLM polishing (default `deepseek/deepseek-v4-flash`,
     override with `OPENROUTER_MODEL`; requires `OPENROUTER_API_KEY`).
 
     Args:

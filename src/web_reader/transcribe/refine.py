@@ -9,7 +9,7 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "deepseek/deepseek-chat"
+DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
 
 SYSTEM_PROMPT = """You are a transcript editor. Your ONLY job is to clean up ASR (speech-to-text) errors in the raw transcript provided.
 

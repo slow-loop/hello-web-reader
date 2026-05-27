@@ -2,7 +2,8 @@
 Apple Podcasts reader — local cache only.
 
 Reads metadata from Apple Podcasts SQLite library and transcribes the
-locally-cached mp3 via Groq Whisper.
+locally-cached mp3 via the SenseVoice + OpenRouter pipeline (see
+`web_reader.transcribe`).
 
 Mac-only: relies on ~/Library/Group Containers/243LU875E5.groups.com.apple.podcasts.
 """
@@ -10,17 +11,12 @@ Mac-only: relies on ~/Library/Group Containers/243LU875E5.groups.com.apple.podca
 from __future__ import annotations
 
 import logging
-import os
-import shutil
 import sqlite3
-import subprocess
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
-from openai import OpenAI
 from pydantic import BaseModel
 
 from ..models import ReadResult
@@ -33,9 +29,6 @@ SQLITE_PATH = APPLE_PODCASTS_DIR / "Documents/MTLibrary.sqlite"
 
 # Apple Core Data timestamps are seconds since 2001-01-01 UTC.
 _COREDATA_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
-
-# Groq Whisper free-tier upload limit is ~25 MB. Compress anything larger.
-_GROQ_SIZE_LIMIT_BYTES = 24 * 1024 * 1024
 
 
 class Episode(BaseModel):
@@ -124,69 +117,26 @@ def get_episode(episode_uuid: str) -> Episode:
     raise LookupError(f"Episode {episode_uuid} not found in local cache")
 
 
-def _build_transcription_client() -> tuple[OpenAI, str]:
-    groq_api_key = os.environ.get("GROQ_API_KEY")
-    if not groq_api_key:
-        raise ValueError("No GROQ_API_KEY found. Set GROQ_API_KEY in env or .env.")
-    client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_api_key)
-    return client, "whisper-large-v3-turbo"
+async def read_podcast(episode_uuid: str, context: str | None = None) -> ReadResult:
+    """Transcribe a locally-cached Apple Podcasts episode.
 
+    Stage 1: local SenseVoice ASR (no upload, no size limit).
+    Stage 2: OpenRouter LLM polishing (requires OPENROUTER_API_KEY).
 
-def _compress_for_whisper(mp3_path: Path, out_path: Path) -> None:
-    """Downsample to mono 16 kHz 32 kbps mp3 — small enough for Groq, fine for speech."""
-    cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        "-i", str(mp3_path),
-        "-ac", "1", "-ar", "16000", "-b:a", "32k",
-        str(out_path),
-    ]
-    subprocess.run(cmd, check=True)
-
-
-def _ensure_uploadable(mp3_path: Path, work_dir: Path) -> Path:
-    if mp3_path.stat().st_size <= _GROQ_SIZE_LIMIT_BYTES:
-        return mp3_path
-    if shutil.which("ffmpeg") is None:
-        raise RuntimeError(
-            f"mp3 is {mp3_path.stat().st_size / 1e6:.1f} MB (over Groq limit) "
-            "and ffmpeg is not installed for compression."
-        )
-    compressed = work_dir / "compressed.mp3"
-    _compress_for_whisper(mp3_path, compressed)
-    return compressed
-
-
-async def read_podcast(episode_uuid: str) -> ReadResult:
-    """Transcribe a locally-cached Apple Podcasts episode via Groq Whisper.
-
-    Returns a ReadResult with the transcript text and episode metadata in raw.
+    Args:
+        episode_uuid: Apple Podcasts episode UUID.
+        context: Optional short domain hint forwarded to the refinement LLM.
     """
+    from ..transcribe import transcribe_audio
+
     url = f"apple-podcast://{episode_uuid}"
     try:
         ep = get_episode(episode_uuid)
     except LookupError as exc:
         return ReadResult.fail(url, str(exc), source_type="apple_podcast")
 
-    client, model = _build_transcription_client()
+    text = transcribe_audio(ep.mp3_path, context=context).strip()
 
-    with tempfile.TemporaryDirectory() as tmp:
-        upload_path = _ensure_uploadable(ep.mp3_path, Path(tmp))
-        with open(upload_path, "rb") as audio:
-            transcription = client.audio.transcriptions.create(
-                model=model,
-                file=audio,
-                response_format="text",
-                language="zh",
-                temperature=0.0,
-                prompt=(
-                    "以下為繁體中文財經投資 Podcast 的逐字稿，內容包含台股、美股、"
-                    "總體經濟、產業趨勢、AI 與科技等討論，會自然夾雜英文公司名與"
-                    "專有名詞，例如 NVIDIA、Apple、Fed、ETF、GPU、AI。語氣口語化，"
-                    "常出現「對啊」「就是」「然後」「其實」「我覺得」等語助詞。"
-                ),
-            )
-
-    text = str(transcription).strip()
     return ReadResult(
         url=url,
         text=text,
@@ -201,6 +151,6 @@ async def read_podcast(episode_uuid: str) -> ReadResult:
             "episode_title": ep.title,
             "webpage_url": ep.webpage_url,
             "mp3_path": str(ep.mp3_path),
-            "method": "groq/whisper-large-v3-turbo",
+            "method": "sensevoice+openrouter",
         },
     )
