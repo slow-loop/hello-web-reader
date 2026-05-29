@@ -21,6 +21,7 @@ dependencies = [
     "markitdown>=0.1",
     "mcp>=1.26.0",
     "platformdirs>=4.0",
+    "opencc-python-reimplemented>=0.1.7",
 ]
 
 [project.optional-dependencies]

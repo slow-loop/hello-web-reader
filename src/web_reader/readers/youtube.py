@@ -162,6 +162,7 @@ async def read_youtube(
     url: str,
     languages: Optional[list[str]] = None,
     use_audio_fallback: bool = True,
+    vocabulary_terms: list[str] | None = None,
 ) -> ReadResult:
     """
     Fetch YouTube video transcript.
@@ -205,7 +206,7 @@ async def read_youtube(
     # Strategy 2: AI transcription fallback
     try:
         logger.info(f"Attempting AI transcription fallback for {video_id}...")
-        transcript_text = await transcribe_youtube(url)
+        transcript_text = await transcribe_youtube(url, vocabulary_terms=vocabulary_terms)
         return _build_result(
             video_id,
             transcript_text,
@@ -317,7 +318,7 @@ async def list_channel_videos(channel_id_or_handle: str, limit: int = 5) -> list
     return results
 
 
-async def transcribe_youtube(url: str, context: str | None = None) -> str:
+async def transcribe_youtube(url: str, vocabulary_terms: list[str] | None = None) -> str:
     """Download YouTube audio and transcribe via the local ASR + LLM pipeline.
 
     Stage 1: SenseVoice (local, via funasr).
@@ -326,7 +327,7 @@ async def transcribe_youtube(url: str, context: str | None = None) -> str:
 
     Args:
         url: YouTube video URL.
-        context: Optional short domain hint forwarded to the refinement LLM.
+        vocabulary_terms: Optional list of proper nouns / terms ASR often mishears.
     """
     from ..transcribe import transcribe_audio
 
@@ -354,4 +355,4 @@ async def transcribe_youtube(url: str, context: str | None = None) -> str:
             raise FileNotFoundError("Audio file was not downloaded successfully.")
 
         audio_path = os.path.join(temp_dir, downloaded_files[0])
-        return transcribe_audio(audio_path, context=context)
+        return transcribe_audio(audio_path, vocabulary_terms=vocabulary_terms)

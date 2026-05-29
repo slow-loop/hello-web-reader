@@ -217,6 +217,7 @@ async def _dispatch(reader: str, url: Optional[str], params: dict) -> list[ReadR
         podcast_title = params.get("podcast_title")
         limit = params.get("limit")
         episode_uuids = params.get("episode_uuids")
+        vocabulary_terms = params.get("vocabulary_terms") or None
 
         if episode_uuids:
             uuids = episode_uuids
@@ -228,7 +229,7 @@ async def _dispatch(reader: str, url: Optional[str], params: dict) -> list[ReadR
 
         results = []
         for uuid in uuids:
-            results.append(await read_podcast(uuid))
+            results.append(await read_podcast(uuid, vocabulary_terms=vocabulary_terms))
         return results
 
     else:

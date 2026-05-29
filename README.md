@@ -24,7 +24,7 @@ Copy the env template and fill in your keys:
 
 ```bash
 cp feeds.example.yaml feeds.yaml   # customise your sources
-# Add to .env: GROQ_API_KEY, YOUTUBE_API_KEY, YAHOO_MAIL_USERNAME, YAHOO_MAIL_PASSWORD
+# Add to .env: YOUTUBE_API_KEY, YAHOO_MAIL_USERNAME, YAHOO_MAIL_PASSWORD
 ```
 
 ## CLI

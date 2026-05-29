@@ -8,7 +8,6 @@ Usage:
 
 Requires:
     YOUTUBE_API_KEY   — list channel videos
-    GROQ_API_KEY      — Whisper fallback when no subtitles available
 """
 
 import argparse

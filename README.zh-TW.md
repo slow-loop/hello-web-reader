@@ -24,7 +24,7 @@ uv sync
 
 ```bash
 cp feeds.example.yaml feeds.yaml   # 自訂來源
-# .env 填入：GROQ_API_KEY、YOUTUBE_API_KEY、YAHOO_MAIL_USERNAME、YAHOO_MAIL_PASSWORD
+# .env 填入：YOUTUBE_API_KEY、YAHOO_MAIL_USERNAME、YAHOO_MAIL_PASSWORD
 ```
 
 ## CLI

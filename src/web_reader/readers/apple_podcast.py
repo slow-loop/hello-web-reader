@@ -117,7 +117,7 @@ def get_episode(episode_uuid: str) -> Episode:
     raise LookupError(f"Episode {episode_uuid} not found in local cache")
 
 
-async def read_podcast(episode_uuid: str, context: str | None = None) -> ReadResult:
+async def read_podcast(episode_uuid: str, vocabulary_terms: list[str] | None = None) -> ReadResult:
     """Transcribe a locally-cached Apple Podcasts episode.
 
     Stage 1: local SenseVoice ASR (no upload, no size limit).
@@ -125,7 +125,7 @@ async def read_podcast(episode_uuid: str, context: str | None = None) -> ReadRes
 
     Args:
         episode_uuid: Apple Podcasts episode UUID.
-        context: Optional short domain hint forwarded to the refinement LLM.
+        vocabulary_terms: Optional list of proper nouns / terms ASR often mishears.
     """
     from ..transcribe import transcribe_audio
 
@@ -135,7 +135,7 @@ async def read_podcast(episode_uuid: str, context: str | None = None) -> ReadRes
     except LookupError as exc:
         return ReadResult.fail(url, str(exc), source_type="apple_podcast")
 
-    text = transcribe_audio(ep.mp3_path, context=context).strip()
+    text = transcribe_audio(ep.mp3_path, vocabulary_terms=vocabulary_terms).strip()
 
     return ReadResult(
         url=url,
