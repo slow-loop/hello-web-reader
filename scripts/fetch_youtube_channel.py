@@ -66,7 +66,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch YouTube channel transcripts")
     parser.add_argument("--handle", required=True, help="YouTube channel handle (e.g. @example) or full channel URL")
     parser.add_argument("--limit", type=int, default=5, help="Number of videos to fetch (default: 5)")
-    parser.add_argument("--lang", nargs="+", default=["zh", "zh-Hant", "en"], help="Preferred languages")
+    parser.add_argument("--lang", nargs="+", default=["zh", "zh-Hant", "zh-Hans", "en"], help="Preferred languages")
     parser.add_argument("--out", type=Path, default=None, help="Output directory (default: print to stdout)")
     args = parser.parse_args()
 

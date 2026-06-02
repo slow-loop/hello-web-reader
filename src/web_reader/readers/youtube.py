@@ -175,7 +175,7 @@ async def read_youtube(
     Requires: pip install web-reader[youtube]
     """
     if languages is None:
-        languages = ["en", "zh"]
+        languages = ["zh", "zh-Hant", "zh-Hans", "en"]
 
     video_id = _extract_video_id(url)
     if not video_id:
