@@ -2,39 +2,45 @@
 CLI for web-reader.
 
 Usage:
-    uv run web-reader <target> [OPTIONS]
-
-Target is either a .yaml/.yml config file or a URL.
+    uv run web-reader read <url> [OPTIONS]
+    uv run web-reader config <file> [OPTIONS]
 
 Examples:
-    uv run web-reader feeds.yaml
-    uv run web-reader feeds.yaml --tags=finance,tech
-    uv run web-reader feeds.yaml --tags=finance --no-cache
-    uv run web-reader "https://hnrss.org/frontpage"
-    uv run web-reader "https://reddit.com/r/investing/hot"
+    uv run web-reader config feeds.yaml
+    uv run web-reader config feeds.yaml --tags finance,tech
+    uv run web-reader read "https://hnrss.org/frontpage"
+    uv run web-reader read "https://www.youtube.com/watch?v=i8OI8CNdZgU" --lang en
 """
 
-import argparse
 import asyncio
 import logging
+from typing import Optional, List
 from urllib.parse import parse_qs
+
+import typer
 
 from .formatting import flatten_results_map, format_results
 from .store import ReadStore
 
-
-def _is_config_file(target: str) -> bool:
-    return target.endswith((".yaml", ".yml"))
-
+app = typer.Typer(
+    help="Lightweight web reader — fetch structured content from URLs and feeds.",
+    add_completion=False,
+)
 
 def _print_results(results, output_format: str) -> None:
     print(format_results(results, output_format))
 
+def _setup_logging(verbose: bool):
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG, format="%(name)s - %(levelname)s - %(message)s")
+    else:
+        logging.basicConfig(level=logging.WARNING)
 
 async def _run_url(
     url: str,
     no_cache: bool,
     output_format: str,
+    lang: Optional[str] = None,
 ) -> None:
     """Fetch a single URL."""
     from ._detect import detect_source_type
@@ -91,7 +97,8 @@ async def _run_url(
         result = await read_substack(url)
     elif source_type == "youtube":
         from .readers.youtube import read_youtube
-        result = await read_youtube(url)
+        languages = [lang] if lang else None
+        result = await read_youtube(url, languages=languages)
     elif source_type == "rss":
         from .readers.rss import read_rss
         result = await read_rss(url)
@@ -105,6 +112,28 @@ async def _run_url(
     if store and result.success and source_type != "rss":
         store.save(result)
 
+    if result.raw and "vtt" in result.raw:
+        video_id = result.raw.get("video_id", "video")
+        lang = result.raw.get("language", "unknown")
+        
+        # Save VTT
+        vtt_path = f"{video_id}_{lang}.vtt"
+        try:
+            with open(vtt_path, "w", encoding="utf-8") as f:
+                f.write(str(result.raw["vtt"]))
+            logging.getLogger(__name__).info(f"Saved VTT to {vtt_path}")
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to save VTT: {e}")
+            
+        # Save MD
+        md_path = f"{video_id}_{lang}.md"
+        try:
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(format_results([result], output_format))
+            logging.getLogger(__name__).info(f"Saved MD to {md_path}")
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to save MD: {e}")
+
     _print_results([result], output_format)
 
 
@@ -117,31 +146,39 @@ async def _run_config(config_path: str, tags: list[str] | None, no_cache: bool, 
     _print_results(flatten_results_map(results_map), output_format)
 
 
+@app.command()
+def read(
+    url: str = typer.Argument(..., help="The URL to read."),
+    format: str = typer.Option("md", help="Output format (json or md)"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Skip cache, always re-fetch"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
+    lang: Optional[str] = typer.Option(None, help="Specific subtitle language for YouTube (e.g. 'en')"),
+):
+    """
+    Read a single URL and output structured text.
+    """
+    _setup_logging(verbose)
+    asyncio.run(_run_url(url, no_cache, format, lang=lang))
+
+
+@app.command()
+def config(
+    file_path: str = typer.Argument(..., help="Path to the YAML config file."),
+    tags: Optional[str] = typer.Option(None, help="Filter config sources by tags (comma-separated)"),
+    format: str = typer.Option("md", help="Output format (json or md)"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Skip cache, always re-fetch"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
+):
+    """
+    Read multiple feeds from a YAML config file.
+    """
+    _setup_logging(verbose)
+    tags_list = [t.strip() for t in tags.split(",")] if tags else None
+    asyncio.run(_run_config(file_path, tags_list, no_cache, format))
+
+
 def main():
-    parser = argparse.ArgumentParser(
-        prog="web-reader",
-        description="Lightweight web reader — fetch structured content from URLs and feeds.",
-        usage="web-reader <target> [options]",
-    )
-    parser.add_argument("target", help="URL or .yaml/.yml config file path")
-    parser.add_argument("--tags", help="Filter config sources by tags (comma-separated)", default=None)
-    parser.add_argument("--no-cache", action="store_true", help="Skip cache, always re-fetch")
-    parser.add_argument("--format", choices=["json", "md"], default="md", help="Output format (default: md)")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
-
-    args = parser.parse_args()
-
-    if args.verbose:
-        logging.basicConfig(level=logging.DEBUG, format="%(name)s - %(levelname)s - %(message)s")
-    else:
-        logging.basicConfig(level=logging.WARNING)
-
-    tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
-
-    if _is_config_file(args.target):
-        asyncio.run(_run_config(args.target, tags, args.no_cache, args.format))
-    else:
-        asyncio.run(_run_url(args.target, args.no_cache, args.format))
+    app()
 
 
 if __name__ == "__main__":

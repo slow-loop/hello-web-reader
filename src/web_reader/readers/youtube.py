@@ -120,8 +120,28 @@ def _subtitle_language_rank(path: Path, languages: list[str]) -> tuple[int, str]
     return len(languages), filename
 
 
-def _download_ytdlp_subtitles(url: str, video_id: str, languages: list[str]) -> tuple[str, str] | None:
+def _download_ytdlp_subtitles(url: str, video_id: str, languages: list[str]) -> tuple[str, str, str] | None:
     with tempfile.TemporaryDirectory() as temp_dir:
+        # Step 1: Fast extract info to detect original language
+        info_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "cookiefile": _cookiefile_path(),
+        }
+        try:
+            with yt_dlp.YoutubeDL(info_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if info and info.get("language"):
+                    # e.g. "en-US" -> "en"
+                    base_lang = info.get("language").split("-")[0]
+                    # Make it the highest priority
+                    if base_lang in languages:
+                        languages.remove(base_lang)
+                    languages.insert(0, base_lang)
+        except Exception as e:
+            logger.info(f"Failed to detect original language for {video_id}: {e}")
+
+        # Step 2: Download subtitles with the updated priority list
         output_template = os.path.join(temp_dir, "%(id)s.%(ext)s")
         ydl_opts = {
             "skip_download": True,
@@ -133,6 +153,7 @@ def _download_ytdlp_subtitles(url: str, video_id: str, languages: list[str]) -> 
             "cookiefile": _cookiefile_path(),
             "quiet": True,
             "no_warnings": True,
+            "noprogress": True,
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -144,7 +165,8 @@ def _download_ytdlp_subtitles(url: str, video_id: str, languages: list[str]) -> 
         )
 
         for subtitle_file in subtitle_files:
-            text = _vtt_to_text(subtitle_file.read_text(encoding="utf-8", errors="ignore"))
+            raw_vtt = subtitle_file.read_text(encoding="utf-8", errors="ignore")
+            text = _vtt_to_text(raw_vtt)
             if not text.strip():
                 continue
 
@@ -153,7 +175,7 @@ def _download_ytdlp_subtitles(url: str, video_id: str, languages: list[str]) -> 
             if len(stem_parts) >= 2:
                 language = stem_parts[-1]
 
-            return text, language
+            return text, language, raw_vtt
 
     return None
 
@@ -187,14 +209,16 @@ async def read_youtube(
     try:
         subtitle_result = _download_ytdlp_subtitles(url, video_id, languages)
         if subtitle_result:
-            text, language = subtitle_result
-            return _build_result(
+            text, language, raw_vtt = subtitle_result
+            res = _build_result(
                 video_id,
                 text,
                 language,
                 method="yt-dlp-subs",
                 snippet_count=len(text.splitlines()),
             )
+            res.raw["vtt"] = raw_vtt
+            return res
     except Exception as e:
         subtitle_error = e
         logger.info(f"yt-dlp subtitles fetch failed for {video_id}: {e}")
@@ -285,36 +309,47 @@ async def list_channel_videos(channel_id_or_handle: str, limit: int = 5) -> list
     uploads_playlist_id = "UU" + channel_id[2:]
 
     url = "https://www.googleapis.com/youtube/v3/playlistItems"
-    params = {
-        "part": "snippet",
-        "playlistId": uploads_playlist_id,
-        "maxResults": limit,
-        "key": api_key,
-        # Best practice: Use fields to optimize payload size
-        "fields": "items(snippet(title,publishedAt,resourceId/videoId))"
-    }
-    
     # Best practice: use gzip
     headers = {"Accept-Encoding": "gzip", "User-Agent": "web-reader (gzip)"}
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(url, params=params, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-
     results = []
-    for item in data.get("items", []):
-        snippet = item.get("snippet", {})
-        video_id = snippet.get("resourceId", {}).get("videoId")
-        if not video_id:
-            continue
+    next_page_token = None
+
+    async with httpx.AsyncClient() as client:
+        while len(results) < limit:
+            page_size = min(limit - len(results), 50)
+            params = {
+                "part": "snippet",
+                "playlistId": uploads_playlist_id,
+                "maxResults": page_size,
+                "key": api_key,
+                # Best practice: Use fields to optimize payload size
+                "fields": "nextPageToken,items(snippet(title,publishedAt,resourceId/videoId))"
+            }
+            if next_page_token:
+                params["pageToken"] = next_page_token
+
+            resp = await client.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+            for item in data.get("items", []):
+                snippet = item.get("snippet", {})
+                video_id = snippet.get("resourceId", {}).get("videoId")
+                if not video_id:
+                    continue
+                    
+                results.append({
+                    "id": video_id,
+                    "title": snippet.get("title", ""),
+                    "url": f"https://www.youtube.com/watch?v={video_id}",
+                    "published_at": snippet.get("publishedAt", ""),
+                })
             
-        results.append({
-            "id": video_id,
-            "title": snippet.get("title", ""),
-            "url": f"https://www.youtube.com/watch?v={video_id}",
-            "published_at": snippet.get("publishedAt", ""),
-        })
+            next_page_token = data.get("nextPageToken")
+            if not next_page_token:
+                break
+
     return results
 
 

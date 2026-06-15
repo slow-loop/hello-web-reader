@@ -36,6 +36,16 @@ async def fetch(handle: str, limit: int, languages: list[str], out_dir: Path | N
         print(f"\n[{i}/{len(videos)}] {v['title']}")
         print(f"  URL: {v['url']}")
         print(f"  Published: {v['published_at']}")
+
+        if out_dir:
+            date = v["published_at"][:10] if v["published_at"] else "unknown"
+            safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in v["title"])[:60].strip()
+            filename = f"{date}_{safe_title}.md"
+            out_file = out_dir / filename
+            if out_file.exists():
+                print(f"  Saved: {out_file} (already exists, skipping)")
+                continue
+
         print("  Fetching transcript...")
 
         result = await read_youtube(v["url"], languages=languages)
