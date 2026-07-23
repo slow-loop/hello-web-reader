@@ -58,6 +58,26 @@ uv run web-reader "gnews://Fed interest rate?period=7d&max=10"
 | `period` | Time range: `1d` `3d` `7d` `30d` | `7d` |
 | `max` | Max results | `10` |
 
+### YouTube channel
+
+List a channel's recent videos into `manifest.csv` (title, date, subtitle
+availability, thumbnail URL). Requires `YOUTUBE_API_KEY`. Nothing is downloaded
+by default — inspect the manifest first, then re-run with the flags you want.
+
+```bash
+# Manifest only (titles + subtitle probe), default 30 most-recent videos
+uv run web-reader channel @example --limit 50
+
+# Also download cover images (no video)
+uv run web-reader channel @example --limit 50 --thumbnails
+
+# Also fetch subtitle transcripts where captions exist
+uv run web-reader channel @example --limit 50 --subtitles --lang zh-Hant,en
+```
+
+Output goes to `./output/<handle>/` (`manifest.csv`, `thumbnails/`, `subtitles/`)
+unless `--out` is given.
+
 > `gnews` returns title + source URL only. To get full text, pipe the URL back through `web-reader`.
 
 ### YAML feed config (batch fetch)
@@ -127,14 +147,11 @@ Standalone scripts in [`scripts/`](scripts/), not wired into the `web-reader` CL
 
 | Script | Description |
 |---|---|
-| `fetch_youtube_channel.py` | Fetch the N most recent videos from a channel (handle or URL) + transcripts |
 | `transcribe_local_audio.py` | Batch-transcribe local audio files via the ASR + LLM polish pipeline |
 | `split_audio_on_silence.py` | Split an audio file into chunks near silence boundaries (used internally by `transcribe_local_audio.py` for long/large files) |
 | `export_claude_conversations.py` | Export local Claude Code / Claude Desktop Cowork conversation history to plain files (macOS only) |
 
 ```bash
-uv run scripts/fetch_youtube_channel.py --handle @example --limit 5 --out ./output/example
-
 .venv/bin/python scripts/transcribe_local_audio.py output/example/audio --out output/example/transcripts --skip-existing
 
 uv run scripts/split_audio_on_silence.py input.m4a -o ./output/example/chunks

@@ -137,6 +137,103 @@ async def _run_url(
     _print_results([result], output_format)
 
 
+def _safe_name(text: str, limit: int = 60) -> str:
+    return "".join(c if c.isalnum() or c in " -_" else "_" for c in text)[:limit].strip()
+
+
+async def _run_channel(
+    handle: str,
+    limit: int,
+    thumbnails: bool,
+    subtitles: bool,
+    languages: list[str] | None,
+    out_dir,
+) -> None:
+    """List a channel's recent videos, probe subtitles, and optionally pull
+    thumbnails and subtitle transcripts."""
+    import csv
+
+    import httpx
+
+    from .readers.youtube import (
+        download_thumbnail,
+        list_channel_videos,
+        probe_subtitles,
+        read_youtube,
+    )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Listing {limit} recent videos from {handle}...")
+    videos = await list_channel_videos(handle, limit=limit)
+    if not videos:
+        print("No videos found.")
+        return
+    print(f"Found {len(videos)} videos. Probing subtitles (no download)...")
+
+    rows = []
+    for i, v in enumerate(videos, 1):
+        try:
+            manual, auto = probe_subtitles(v["url"])
+        except Exception as e:
+            manual, auto = [], False
+            print(f"  [{i}/{len(videos)}] probe failed for {v['id']}: {e}")
+        marker = ",".join(manual) if manual else ("auto" if auto else "-")
+        print(f"  [{i}/{len(videos)}] {marker:<14} {v['title']}")
+        rows.append({
+            "index": i,
+            "video_id": v["id"],
+            "published_at": v["published_at"],
+            "title": v["title"],
+            "url": v["url"],
+            "manual_subs": ",".join(manual),
+            "auto_subs": "yes" if auto else "",
+            "thumbnail_url": v.get("thumbnail") or "",
+        })
+
+    manifest = out_dir / "manifest.csv"
+    with manifest.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"\nSaved manifest: {manifest}")
+
+    if thumbnails:
+        thumb_dir = out_dir / "thumbnails"
+        thumb_dir.mkdir(exist_ok=True)
+        print(f"\nDownloading {len(videos)} thumbnails to {thumb_dir}...")
+        async with httpx.AsyncClient(timeout=30) as client:
+            for i, v in enumerate(videos, 1):
+                dest = thumb_dir / f"{v['id']}.jpg"
+                if dest.exists():
+                    continue
+                used = await download_thumbnail(v["id"], dest, client, v.get("thumbnail"))
+                status = "ok" if used else "FAILED"
+                print(f"  [{i}/{len(videos)}] {status} {v['id']}")
+
+    if subtitles:
+        subs_dir = out_dir / "subtitles"
+        subs_dir.mkdir(exist_ok=True)
+        # Only fetch where the probe found subtitles (manual or auto).
+        targets = [r for r in rows if r["manual_subs"] or r["auto_subs"]]
+        print(f"\nFetching subtitles for {len(targets)} videos with captions to {subs_dir}...")
+        for i, r in enumerate(targets, 1):
+            date = (r["published_at"] or "unknown")[:10]
+            out_file = subs_dir / f"{date}_{_safe_name(r['title'])}.md"
+            if out_file.exists():
+                print(f"  [{i}/{len(targets)}] exists, skipping {r['video_id']}")
+                continue
+            result = await read_youtube(r["url"], languages=languages, use_audio_fallback=False)
+            if not result.success:
+                print(f"  [{i}/{len(targets)}] ERROR {r['video_id']}: {result.error}")
+                continue
+            out_file.write_text(result.text, encoding="utf-8")
+            lang = result.language or "?"
+            print(f"  [{i}/{len(targets)}] ok ({lang}, {len(result.text)} chars) -> {out_file.name}")
+
+    print("\nDone.")
+
+
 async def _run_config(config_path: str, tags: list[str] | None, no_cache: bool, output_format: str) -> None:
     """Run a YAML config file."""
     from .runner import run_config
@@ -175,6 +272,30 @@ def config(
     _setup_logging(verbose)
     tags_list = [t.strip() for t in tags.split(",")] if tags else None
     asyncio.run(_run_config(file_path, tags_list, no_cache, format))
+
+
+@app.command()
+def channel(
+    handle: str = typer.Argument(..., help="YouTube channel handle (@name) or channel/URL."),
+    limit: int = typer.Option(30, help="Number of most-recent videos to include."),
+    thumbnails: bool = typer.Option(False, "--thumbnails", help="Also download cover images (no video)."),
+    subtitles: bool = typer.Option(False, "--subtitles", help="Also fetch subtitle transcripts where available."),
+    lang: Optional[str] = typer.Option(None, help="Comma-separated preferred subtitle languages (e.g. 'zh-Hant,en')."),
+    out: Optional[str] = typer.Option(None, help="Output directory (default: ./output/<handle>)."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
+):
+    """
+    List a YouTube channel's recent videos into a manifest.csv (title, date,
+    subtitle availability, thumbnail URL). Add --thumbnails / --subtitles to
+    also download cover images and subtitle transcripts.
+    """
+    from pathlib import Path
+
+    _setup_logging(verbose)
+    languages = [s.strip() for s in lang.split(",")] if lang else None
+    handle_name = _safe_name(handle.rstrip("/").split("/")[-1].lstrip("@")) or "channel"
+    out_dir = Path(out) if out else Path("output") / handle_name
+    asyncio.run(_run_channel(handle, limit, thumbnails, subtitles, languages, out_dir))
 
 
 def main():

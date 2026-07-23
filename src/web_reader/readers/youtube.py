@@ -324,7 +324,7 @@ async def list_channel_videos(channel_id_or_handle: str, limit: int = 5) -> list
                 "maxResults": page_size,
                 "key": api_key,
                 # Best practice: Use fields to optimize payload size
-                "fields": "nextPageToken,items(snippet(title,publishedAt,resourceId/videoId))"
+                "fields": "nextPageToken,items(snippet(title,publishedAt,thumbnails,resourceId/videoId))"
             }
             if next_page_token:
                 params["pageToken"] = next_page_token
@@ -338,12 +338,13 @@ async def list_channel_videos(channel_id_or_handle: str, limit: int = 5) -> list
                 video_id = snippet.get("resourceId", {}).get("videoId")
                 if not video_id:
                     continue
-                    
+
                 results.append({
                     "id": video_id,
                     "title": snippet.get("title", ""),
                     "url": f"https://www.youtube.com/watch?v={video_id}",
                     "published_at": snippet.get("publishedAt", ""),
+                    "thumbnail": _best_thumbnail(snippet.get("thumbnails", {})),
                 })
             
             next_page_token = data.get("nextPageToken")
@@ -351,6 +352,60 @@ async def list_channel_videos(channel_id_or_handle: str, limit: int = 5) -> list
                 break
 
     return results
+
+
+def _best_thumbnail(thumbnails: dict) -> str | None:
+    """Pick the highest-resolution thumbnail URL the API returned."""
+    for key in ("maxres", "standard", "high", "medium", "default"):
+        entry = thumbnails.get(key)
+        if entry and entry.get("url"):
+            return entry["url"]
+    return None
+
+
+def probe_subtitles(url: str) -> tuple[list[str], bool]:
+    """Check what subtitles a video has, without downloading them.
+
+    Returns (manual_subtitle_langs, auto_captions_available). Manual subtitles
+    are human-authored and preferred; auto captions are machine-generated.
+    """
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "cookiefile": _cookiefile_path(),
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    manual = sorted((info.get("subtitles") or {}).keys())
+    auto_available = bool(info.get("automatic_captions"))
+    return manual, auto_available
+
+
+async def download_thumbnail(
+    video_id: str,
+    dest: Path,
+    client: httpx.AsyncClient,
+    fallback_url: str | None = None,
+) -> str | None:
+    """Download a video's cover image to `dest`. Tries maxres first, then falls
+    back to the API-provided URL, then hqdefault. Returns the URL used, or None."""
+    candidates = [f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg"]
+    if fallback_url:
+        candidates.append(fallback_url)
+    candidates.append(f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg")
+
+    for candidate in candidates:
+        try:
+            resp = await client.get(candidate)
+        except httpx.HTTPError:
+            continue
+        # YouTube returns a 120x90 placeholder (a few KB) for missing maxres.
+        if resp.status_code == 200 and len(resp.content) > 2000:
+            dest.write_bytes(resp.content)
+            return candidate
+    return None
 
 
 async def transcribe_youtube(url: str, vocabulary_terms: list[str] | None = None) -> str:
