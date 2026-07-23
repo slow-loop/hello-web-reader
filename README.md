@@ -60,23 +60,24 @@ uv run web-reader "gnews://Fed interest rate?period=7d&max=10"
 
 ### YouTube channel
 
-List a channel's recent videos into `manifest.csv` (title, date, subtitle
-availability, thumbnail URL). Requires `YOUTUBE_API_KEY`. Nothing is downloaded
-by default — inspect the manifest first, then re-run with the flags you want.
+List a channel's recent videos into `manifest.csv` (title, date, url, thumbnail
+URL) via the YouTube Data API. Requires `YOUTUBE_API_KEY`. The default is a pure
+API call — fast, even for hundreds of videos. Nothing is downloaded until you add
+a flag.
 
 ```bash
-# Manifest only (titles + subtitle probe), default 30 most-recent videos
+# Manifest only (API, no downloads), default 30 most-recent videos
 uv run web-reader channel @example --limit 50
 
 # Also download cover images (no video)
 uv run web-reader channel @example --limit 50 --thumbnails
 
-# Also fetch subtitle transcripts where captions exist
+# Also fetch subtitle transcripts (videos without captions are skipped)
 uv run web-reader channel @example --limit 50 --subtitles --lang zh-Hant,en
 ```
 
 Output goes to `./output/<handle>/` (`manifest.csv`, `thumbnails/`, `subtitles/`)
-unless `--out` is given.
+unless `--out` is given. Re-running skips thumbnails/subtitles already on disk.
 
 > `gnews` returns title + source URL only. To get full text, pipe the URL back through `web-reader`.
 

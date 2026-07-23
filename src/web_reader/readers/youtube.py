@@ -363,38 +363,18 @@ def _best_thumbnail(thumbnails: dict) -> str | None:
     return None
 
 
-def probe_subtitles(url: str) -> tuple[list[str], bool]:
-    """Check what subtitles a video has, without downloading them.
-
-    Returns (manual_subtitle_langs, auto_captions_available). Manual subtitles
-    are human-authored and preferred; auto captions are machine-generated.
-    """
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "cookiefile": _cookiefile_path(),
-    }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-
-    manual = sorted((info.get("subtitles") or {}).keys())
-    auto_available = bool(info.get("automatic_captions"))
-    return manual, auto_available
-
-
 async def download_thumbnail(
     video_id: str,
     dest: Path,
     client: httpx.AsyncClient,
     fallback_url: str | None = None,
 ) -> str | None:
-    """Download a video's cover image to `dest`. Tries maxres first, then falls
-    back to the API-provided URL, then hqdefault. Returns the URL used, or None."""
-    candidates = [f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg"]
+    """Download a video's cover image to `dest`. Uses standard quality
+    (hqdefault, 480x360), which exists for every video; falls back to the
+    API-provided URL. Returns the URL used, or None."""
+    candidates = [f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"]
     if fallback_url:
         candidates.append(fallback_url)
-    candidates.append(f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg")
 
     for candidate in candidates:
         try:

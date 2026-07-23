@@ -149,18 +149,13 @@ async def _run_channel(
     languages: list[str] | None,
     out_dir,
 ) -> None:
-    """List a channel's recent videos, probe subtitles, and optionally pull
-    thumbnails and subtitle transcripts."""
+    """List a channel's recent videos (API only) into a manifest, and optionally
+    download thumbnails and subtitle transcripts."""
     import csv
 
     import httpx
 
-    from .readers.youtube import (
-        download_thumbnail,
-        list_channel_videos,
-        probe_subtitles,
-        read_youtube,
-    )
+    from .readers.youtube import download_thumbnail, list_channel_videos, read_youtube
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -169,67 +164,57 @@ async def _run_channel(
     if not videos:
         print("No videos found.")
         return
-    print(f"Found {len(videos)} videos. Probing subtitles (no download)...")
+    print(f"Found {len(videos)} videos.")
 
-    rows = []
-    for i, v in enumerate(videos, 1):
-        try:
-            manual, auto = probe_subtitles(v["url"])
-        except Exception as e:
-            manual, auto = [], False
-            print(f"  [{i}/{len(videos)}] probe failed for {v['id']}: {e}")
-        marker = ",".join(manual) if manual else ("auto" if auto else "-")
-        print(f"  [{i}/{len(videos)}] {marker:<14} {v['title']}")
-        rows.append({
+    rows = [
+        {
             "index": i,
             "video_id": v["id"],
             "published_at": v["published_at"],
             "title": v["title"],
             "url": v["url"],
-            "manual_subs": ",".join(manual),
-            "auto_subs": "yes" if auto else "",
             "thumbnail_url": v.get("thumbnail") or "",
-        })
+        }
+        for i, v in enumerate(videos, 1)
+    ]
 
     manifest = out_dir / "manifest.csv"
     with manifest.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
-    print(f"\nSaved manifest: {manifest}")
+    print(f"Saved manifest: {manifest}")
 
     if thumbnails:
         thumb_dir = out_dir / "thumbnails"
         thumb_dir.mkdir(exist_ok=True)
-        print(f"\nDownloading {len(videos)} thumbnails to {thumb_dir}...")
+        print(f"\nDownloading {len(rows)} thumbnails to {thumb_dir}...")
         async with httpx.AsyncClient(timeout=30) as client:
-            for i, v in enumerate(videos, 1):
-                dest = thumb_dir / f"{v['id']}.jpg"
+            for i, r in enumerate(rows, 1):
+                dest = thumb_dir / f"{r['video_id']}.jpg"
                 if dest.exists():
                     continue
-                used = await download_thumbnail(v["id"], dest, client, v.get("thumbnail"))
+                used = await download_thumbnail(r["video_id"], dest, client, r["thumbnail_url"] or None)
                 status = "ok" if used else "FAILED"
-                print(f"  [{i}/{len(videos)}] {status} {v['id']}")
+                print(f"  [{i}/{len(rows)}] {status} {r['video_id']}")
 
     if subtitles:
         subs_dir = out_dir / "subtitles"
         subs_dir.mkdir(exist_ok=True)
-        # Only fetch where the probe found subtitles (manual or auto).
-        targets = [r for r in rows if r["manual_subs"] or r["auto_subs"]]
-        print(f"\nFetching subtitles for {len(targets)} videos with captions to {subs_dir}...")
-        for i, r in enumerate(targets, 1):
+        print(f"\nFetching subtitles to {subs_dir} (videos without captions are skipped)...")
+        for i, r in enumerate(rows, 1):
             date = (r["published_at"] or "unknown")[:10]
             out_file = subs_dir / f"{date}_{_safe_name(r['title'])}.md"
             if out_file.exists():
-                print(f"  [{i}/{len(targets)}] exists, skipping {r['video_id']}")
+                print(f"  [{i}/{len(rows)}] exists, skipping {r['video_id']}")
                 continue
             result = await read_youtube(r["url"], languages=languages, use_audio_fallback=False)
             if not result.success:
-                print(f"  [{i}/{len(targets)}] ERROR {r['video_id']}: {result.error}")
+                print(f"  [{i}/{len(rows)}] no subs {r['video_id']}")
                 continue
             out_file.write_text(result.text, encoding="utf-8")
             lang = result.language or "?"
-            print(f"  [{i}/{len(targets)}] ok ({lang}, {len(result.text)} chars) -> {out_file.name}")
+            print(f"  [{i}/{len(rows)}] ok ({lang}, {len(result.text)} chars) -> {out_file.name}")
 
     print("\nDone.")
 
@@ -286,8 +271,8 @@ def channel(
 ):
     """
     List a YouTube channel's recent videos into a manifest.csv (title, date,
-    subtitle availability, thumbnail URL). Add --thumbnails / --subtitles to
-    also download cover images and subtitle transcripts.
+    url, thumbnail URL) via the YouTube Data API. Add --thumbnails / --subtitles
+    to also download cover images and subtitle transcripts.
     """
     from pathlib import Path
 
