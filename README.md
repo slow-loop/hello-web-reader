@@ -121,6 +121,27 @@ store = ReadStore()
 result = await read_url("https://example.com", store=store, cache_ttl=3600)
 ```
 
+## Scripts
+
+Standalone scripts in [`scripts/`](scripts/), not wired into the `web-reader` CLI:
+
+| Script | Description |
+|---|---|
+| `fetch_youtube_channel.py` | Fetch the N most recent videos from a channel (handle or URL) + transcripts |
+| `transcribe_local_audio.py` | Batch-transcribe local audio files via the ASR + LLM polish pipeline |
+| `split_audio_on_silence.py` | Split an audio file into chunks near silence boundaries (used internally by `transcribe_local_audio.py` for long/large files) |
+| `export_claude_conversations.py` | Export local Claude Code / Claude Desktop Cowork conversation history to plain files (macOS only) |
+
+```bash
+uv run scripts/fetch_youtube_channel.py --handle @example --limit 5 --out ./output/example
+
+.venv/bin/python scripts/transcribe_local_audio.py output/example/audio --out output/example/transcripts --skip-existing
+
+uv run scripts/split_audio_on_silence.py input.m4a -o ./output/example/chunks
+
+uv run scripts/export_claude_conversations.py --project hello-trader-skill --days 7 --dry-run
+```
+
 ## MCP Server
 
 A generic `stdio` MCP server — no domain-specific config baked in.

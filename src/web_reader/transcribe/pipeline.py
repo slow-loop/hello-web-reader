@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import opencc
@@ -34,6 +35,10 @@ def transcribe_audio(audio_path: Path | str, vocabulary_terms: list[str] | None 
 
     logger.info("Stage 1b: OpenCC s2twp conversion (%d chars)", len(raw))
     raw = _s2twp.convert(raw)
+
+    if os.environ.get("TRANSCRIBE_SKIP_REFINE", "").strip().lower() in ("1", "true", "yes"):
+        logger.info("Stage 2 skipped (TRANSCRIBE_SKIP_REFINE set); returning local ASR output")
+        return raw
 
     logger.info("Stage 2: LLM refinement (%d chars)", len(raw))
     return refine.refine(raw, vocabulary_terms=vocabulary_terms)
