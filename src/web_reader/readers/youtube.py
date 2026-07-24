@@ -363,6 +363,37 @@ def _best_thumbnail(thumbnails: dict) -> str | None:
     return None
 
 
+async def fetch_video_details(video_ids: list[str]) -> dict[str, dict]:
+    """Fetch full video metadata via YouTube Data API v3, batched 50 IDs per call.
+
+    Returns {video_id: raw_api_item} with snippet (title, description, tags,
+    languages), contentDetails (duration, caption availability), statistics
+    (views, likes, comments) and status. Costs 1 quota unit per 50 videos.
+    """
+    api_key = os.environ.get("YOUTUBE_API_KEY")
+    if not api_key:
+        raise ValueError("YOUTUBE_API_KEY environment variable is required to fetch video details.")
+
+    url = "https://www.googleapis.com/youtube/v3/videos"
+    headers = {"Accept-Encoding": "gzip", "User-Agent": "web-reader (gzip)"}
+
+    details: dict[str, dict] = {}
+    async with httpx.AsyncClient(timeout=30) as client:
+        for start in range(0, len(video_ids), 50):
+            batch = video_ids[start:start + 50]
+            params = {
+                "part": "snippet,contentDetails,statistics,status",
+                "id": ",".join(batch),
+                "key": api_key,
+            }
+            resp = await client.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            for item in resp.json().get("items", []):
+                details[item["id"]] = item
+
+    return details
+
+
 async def download_thumbnail(
     video_id: str,
     dest: Path,

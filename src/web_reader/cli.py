@@ -141,6 +141,19 @@ def _safe_name(text: str, limit: int = 60) -> str:
     return "".join(c if c.isalnum() or c in " -_" else "_" for c in text)[:limit].strip()
 
 
+def _parse_iso_duration(iso: str) -> str:
+    """ISO 8601 duration (PT1H2M3S) -> h:mm:ss / m:ss."""
+    import re
+
+    match = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso or "")
+    if not match:
+        return ""
+    hours, minutes, seconds = (int(g) if g else 0 for g in match.groups())
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
 async def _run_channel(
     handle: str,
     limit: int,
@@ -149,13 +162,19 @@ async def _run_channel(
     languages: list[str] | None,
     out_dir,
 ) -> None:
-    """List a channel's recent videos (API only) into a manifest, and optionally
+    """List a channel's recent videos with full API metadata, and optionally
     download thumbnails and subtitle transcripts."""
     import csv
+    import json
 
     import httpx
 
-    from .readers.youtube import download_thumbnail, list_channel_videos, read_youtube
+    from .readers.youtube import (
+        download_thumbnail,
+        fetch_video_details,
+        list_channel_videos,
+        read_youtube,
+    )
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -164,19 +183,41 @@ async def _run_channel(
     if not videos:
         print("No videos found.")
         return
-    print(f"Found {len(videos)} videos.")
+    print(f"Found {len(videos)} videos. Fetching full metadata...")
 
-    rows = [
-        {
+    details = await fetch_video_details([v["id"] for v in videos])
+    print(f"Got metadata for {len(details)}/{len(videos)} videos.")
+
+    # Keep the complete API response — the CSV below is only a readable subset.
+    raw_path = out_dir / "videos.json"
+    raw_path.write_text(
+        json.dumps([details[v["id"]] for v in videos if v["id"] in details], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(f"Saved raw metadata: {raw_path}")
+
+    rows = []
+    for i, v in enumerate(videos, 1):
+        item = details.get(v["id"], {})
+        snippet = item.get("snippet", {})
+        content = item.get("contentDetails", {})
+        stats = item.get("statistics", {})
+        rows.append({
             "index": i,
             "video_id": v["id"],
             "published_at": v["published_at"],
+            "duration": _parse_iso_duration(content.get("duration", "")),
             "title": v["title"],
+            "views": stats.get("viewCount", ""),
+            "likes": stats.get("likeCount", ""),
+            "comments": stats.get("commentCount", ""),
+            "caption": content.get("caption", ""),
+            "definition": content.get("definition", ""),
+            "language": snippet.get("defaultAudioLanguage") or snippet.get("defaultLanguage") or "",
+            "tags": "|".join(snippet.get("tags", [])),
             "url": v["url"],
             "thumbnail_url": v.get("thumbnail") or "",
-        }
-        for i, v in enumerate(videos, 1)
-    ]
+        })
 
     manifest = out_dir / "manifest.csv"
     with manifest.open("w", encoding="utf-8", newline="") as f:
@@ -201,20 +242,23 @@ async def _run_channel(
     if subtitles:
         subs_dir = out_dir / "subtitles"
         subs_dir.mkdir(exist_ok=True)
-        print(f"\nFetching subtitles to {subs_dir} (videos without captions are skipped)...")
-        for i, r in enumerate(rows, 1):
+        # The API already told us which videos have captions — skip the rest
+        # without paying for a yt-dlp round trip.
+        targets = [r for r in rows if r["caption"] == "true"]
+        print(f"\nFetching subtitles for {len(targets)}/{len(rows)} videos with captions to {subs_dir}...")
+        for i, r in enumerate(targets, 1):
             date = (r["published_at"] or "unknown")[:10]
             out_file = subs_dir / f"{date}_{_safe_name(r['title'])}.md"
             if out_file.exists():
-                print(f"  [{i}/{len(rows)}] exists, skipping {r['video_id']}")
+                print(f"  [{i}/{len(targets)}] exists, skipping {r['video_id']}")
                 continue
             result = await read_youtube(r["url"], languages=languages, use_audio_fallback=False)
             if not result.success:
-                print(f"  [{i}/{len(rows)}] no subs {r['video_id']}")
+                print(f"  [{i}/{len(targets)}] FAILED {r['video_id']}: {result.error}")
                 continue
             out_file.write_text(result.text, encoding="utf-8")
             lang = result.language or "?"
-            print(f"  [{i}/{len(rows)}] ok ({lang}, {len(result.text)} chars) -> {out_file.name}")
+            print(f"  [{i}/{len(targets)}] ok ({lang}, {len(result.text)} chars) -> {out_file.name}")
 
     print("\nDone.")
 
