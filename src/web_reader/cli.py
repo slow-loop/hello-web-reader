@@ -166,6 +166,7 @@ async def _run_channel(
     download thumbnails and subtitle transcripts."""
     import csv
     import json
+    from datetime import datetime
 
     import httpx
 
@@ -177,6 +178,8 @@ async def _run_channel(
     )
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Timestamp aggregate files so re-runs never overwrite a previous snapshot.
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
     print(f"Listing {limit} recent videos from {handle}...")
     videos = await list_channel_videos(handle, limit=limit)
@@ -189,7 +192,7 @@ async def _run_channel(
     print(f"Got metadata for {len(details)}/{len(videos)} videos.")
 
     # Keep the complete API response — the CSV below is only a readable subset.
-    raw_path = out_dir / "videos.json"
+    raw_path = out_dir / f"videos_{stamp}.json"
     raw_path.write_text(
         json.dumps([details[v["id"]] for v in videos if v["id"] in details], ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -219,7 +222,7 @@ async def _run_channel(
             "thumbnail_url": v.get("thumbnail") or "",
         })
 
-    manifest = out_dir / "manifest.csv"
+    manifest = out_dir / f"manifest_{stamp}.csv"
     with manifest.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()

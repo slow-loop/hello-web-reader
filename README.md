@@ -62,12 +62,16 @@ uv run web-reader "gnews://Fed interest rate?period=7d&max=10"
 
 List a channel's videos with full metadata via the YouTube Data API. Requires
 `YOUTUBE_API_KEY`. The default is a pure API call — ~1300 videos in ~15s, about
-55 quota units. Nothing is downloaded until you add a flag. Two files are written:
+55 quota units. Nothing is downloaded until you add a flag. Each run writes two
+timestamped files (so re-running never overwrites an earlier snapshot):
 
-- `videos.json` — the complete API response per video (description, tags,
-  statistics, status, all thumbnail sizes); nothing discarded
-- `manifest.csv` — readable subset: date, duration, title, views, likes,
-  comments, caption availability, definition, language, tags, url
+- `videos_<timestamp>.json` — the complete API response per video (description,
+  tags, statistics, status, all thumbnail sizes); nothing discarded
+- `manifest_<timestamp>.csv` — readable subset: date, duration, title, views,
+  likes, comments, caption availability, definition, language, tags, url
+
+Thumbnails and subtitles go in `thumbnails/` and `subtitles/`, keyed by video
+ID and skipped if already present, so they accumulate across runs.
 
 ```bash
 # Metadata only (API, no downloads), default 30 most-recent videos
