@@ -154,6 +154,14 @@ def _parse_iso_duration(iso: str) -> str:
     return f"{minutes}:{seconds:02d}"
 
 
+def _duration_seconds(duration: str) -> int:
+    """Inverse of _parse_iso_duration's output: h:mm:ss / m:ss -> seconds."""
+    if not duration:
+        return 0
+    parts = [int(p) for p in duration.split(":")]
+    return parts[0] * 3600 + parts[1] * 60 + parts[2] if len(parts) == 3 else parts[0] * 60 + parts[1]
+
+
 async def _run_channel(
     handle: str,
     limit: int,
@@ -161,6 +169,7 @@ async def _run_channel(
     until: str | None,
     thumbnails: bool,
     subtitles: bool,
+    transcribe: bool,
     languages: list[str] | None,
     out_dir,
 ) -> None:
@@ -168,6 +177,7 @@ async def _run_channel(
     thumbnails and subtitle transcripts."""
     import csv
     import json
+    import time
     from datetime import datetime
 
     import httpx
@@ -181,8 +191,13 @@ async def _run_channel(
     )
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Timestamp aggregate files so re-runs never overwrite a previous snapshot.
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    # Timestamp aggregate files so re-runs never overwrite a previous snapshot,
+    # and name any active filter into them so a windowed snapshot can never be
+    # mistaken on disk for a complete one.
+    scope = "".join(
+        f"_{k}-{v}" for k, v in (("since", since), ("until", until), ("limit", limit or None)) if v
+    )
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + scope
 
     # Report the channel's true size first — a capped run must never look complete.
     info = await fetch_channel_info(handle)
@@ -276,6 +291,35 @@ async def _run_channel(
             lang = result.language or "?"
             print(f"  [{i}/{len(targets)}] ok ({lang}, {len(result.text)} chars) -> {out_file.name}")
 
+    if transcribe:
+        tx_dir = out_dir / "transcripts"
+        tx_dir.mkdir(exist_ok=True)
+        # Complement of --subtitles: only videos with no caption track, which is
+        # the only case worth paying for audio ASR. Kept in its own folder
+        # because machine transcripts are not interchangeable with real captions.
+        targets = [r for r in rows if r["caption"] != "true"]
+        audio_min = sum(_duration_seconds(r["duration"]) for r in targets) / 60
+        print(
+            f"\nTranscripts: {len(targets)}/{len(rows)} videos have no captions, "
+            f"{audio_min / 60:.1f}h of audio -> {tx_dir}"
+        )
+        for i, r in enumerate(targets, 1):
+            if next(tx_dir.glob(f"*_{r['video_id']}_*.md"), None):
+                print(f"  [{i}/{len(targets)}] exists, skipping {r['video_id']}")
+                continue
+            date = (r["published_at"] or "unknown")[:10]
+            out_file = tx_dir / f"{date}_{r['video_id']}_{_safe_name(r['title'])}.md"
+            started = time.monotonic()
+            result = await read_youtube(r["url"], languages=languages, use_audio_fallback=True)
+            if not result.success:
+                print(f"  [{i}/{len(targets)}] FAILED {r['video_id']}: {result.error}")
+                continue
+            out_file.write_text(result.text, encoding="utf-8")
+            print(
+                f"  [{i}/{len(targets)}] ok ({r['duration']} audio in "
+                f"{time.monotonic() - started:.0f}s, {len(result.text)} chars) -> {out_file.name}"
+            )
+
     print("\nDone.")
 
 
@@ -327,6 +371,7 @@ def channel(
     limit: int = typer.Option(0, help="Cap at N newest videos after date filtering. 0 = no cap."),
     thumbnails: bool = typer.Option(False, "--thumbnails", help="Also download cover images (no video)."),
     subtitles: bool = typer.Option(False, "--subtitles", help="Also fetch subtitle transcripts where available."),
+    transcribe: bool = typer.Option(False, "--transcribe", help="Audio-transcribe the videos that have NO captions (slow, local ASR)."),
     lang: Optional[str] = typer.Option(None, help="Comma-separated preferred subtitle languages (e.g. 'zh-Hant,en')."),
     out: Optional[str] = typer.Option(None, help="Output directory (default: ./output/<handle>)."),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
@@ -353,7 +398,9 @@ def channel(
     lookup = _channel_lookup_params(handle)
     handle_name = _safe_name(lookup.get("forHandle", lookup.get("id", "")).lstrip("@")) or "channel"
     out_dir = Path(out) if out else Path("output") / handle_name
-    asyncio.run(_run_channel(handle, limit, since, until, thumbnails, subtitles, languages, out_dir))
+    asyncio.run(
+        _run_channel(handle, limit, since, until, thumbnails, subtitles, transcribe, languages, out_dir)
+    )
 
 
 def main():
