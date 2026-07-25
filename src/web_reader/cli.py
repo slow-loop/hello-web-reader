@@ -157,13 +157,15 @@ def _parse_iso_duration(iso: str) -> str:
 async def _run_channel(
     handle: str,
     limit: int,
+    since: str | None,
+    until: str | None,
     thumbnails: bool,
     subtitles: bool,
     languages: list[str] | None,
     out_dir,
 ) -> None:
-    """List a channel's recent videos with full API metadata, and optionally
-    download thumbnails and subtitle transcripts."""
+    """List a channel's videos with full API metadata, and optionally download
+    thumbnails and subtitle transcripts."""
     import csv
     import json
     from datetime import datetime
@@ -172,6 +174,7 @@ async def _run_channel(
 
     from .readers.youtube import (
         download_thumbnail,
+        fetch_channel_info,
         fetch_video_details,
         list_channel_videos,
         read_youtube,
@@ -181,12 +184,18 @@ async def _run_channel(
     # Timestamp aggregate files so re-runs never overwrite a previous snapshot.
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    print(f"Listing {limit} recent videos from {handle}...")
-    videos = await list_channel_videos(handle, limit=limit)
+    # Report the channel's true size first — a capped run must never look complete.
+    info = await fetch_channel_info(handle)
+    print(f"Channel: {info['title']} — {info['video_count']} videos total")
+
+    videos = await list_channel_videos(info["id"], limit=limit, since=since, until=until)
     if not videos:
-        print("No videos found.")
+        print("No videos matched.")
         return
-    print(f"Found {len(videos)} videos. Fetching full metadata...")
+
+    window = f", window {since or 'start'}..{until or 'now'}" if (since or until) else ""
+    capped = " (capped by --limit; use --limit 0 for all)" if limit and len(videos) == limit else ""
+    print(f"Selected {len(videos)} videos{window}{capped}. Fetching full metadata...")
 
     details = await fetch_video_details([v["id"] for v in videos])
     print(f"Got metadata for {len(details)}/{len(videos)} videos.")
@@ -248,13 +257,17 @@ async def _run_channel(
         # The API already told us which videos have captions — skip the rest
         # without paying for a yt-dlp round trip.
         targets = [r for r in rows if r["caption"] == "true"]
-        print(f"\nFetching subtitles for {len(targets)}/{len(rows)} videos with captions to {subs_dir}...")
+        print(
+            f"\nSubtitles: {len(targets)}/{len(rows)} videos have captions "
+            f"(est. ~{max(1, round(len(targets) * 3 / 60))} min) -> {subs_dir}"
+        )
         for i, r in enumerate(targets, 1):
-            date = (r["published_at"] or "unknown")[:10]
-            out_file = subs_dir / f"{date}_{_safe_name(r['title'])}.md"
-            if out_file.exists():
+            # Key the skip on video_id so a retitled video is not fetched twice.
+            if next(subs_dir.glob(f"*_{r['video_id']}_*.md"), None):
                 print(f"  [{i}/{len(targets)}] exists, skipping {r['video_id']}")
                 continue
+            date = (r["published_at"] or "unknown")[:10]
+            out_file = subs_dir / f"{date}_{r['video_id']}_{_safe_name(r['title'])}.md"
             result = await read_youtube(r["url"], languages=languages, use_audio_fallback=False)
             if not result.success:
                 print(f"  [{i}/{len(targets)}] FAILED {r['video_id']}: {result.error}")
@@ -309,7 +322,9 @@ def config(
 @app.command()
 def channel(
     handle: str = typer.Argument(..., help="YouTube channel handle (@name) or channel/URL."),
-    limit: int = typer.Option(30, help="Number of most-recent videos to include."),
+    since: Optional[str] = typer.Option(None, help="Only videos published on/after this date (YYYY-MM-DD)."),
+    until: Optional[str] = typer.Option(None, help="Only videos published on/before this date (YYYY-MM-DD)."),
+    limit: int = typer.Option(0, help="Cap at N newest videos after date filtering. 0 = no cap."),
     thumbnails: bool = typer.Option(False, "--thumbnails", help="Also download cover images (no video)."),
     subtitles: bool = typer.Option(False, "--subtitles", help="Also fetch subtitle transcripts where available."),
     lang: Optional[str] = typer.Option(None, help="Comma-separated preferred subtitle languages (e.g. 'zh-Hant,en')."),
@@ -317,17 +332,28 @@ def channel(
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
 ):
     """
-    List a YouTube channel's recent videos into a manifest.csv (title, date,
-    url, thumbnail URL) via the YouTube Data API. Add --thumbnails / --subtitles
-    to also download cover images and subtitle transcripts.
+    Snapshot a YouTube channel's videos via the YouTube Data API: every run
+    writes a fresh timestamped manifest_<stamp>.csv and videos_<stamp>.json and
+    never overwrites an earlier one, so the newest file is always the newest
+    observation. Add --thumbnails / --subtitles to also download cover images
+    and subtitle transcripts; those are named by video ID and skipped when
+    already present, so an interrupted run resumes for free.
+
+    The whole channel is listed by default. --since/--until pick a date window;
+    --limit then caps that window at N newest videos.
     """
     from pathlib import Path
 
+    from .readers.youtube import _channel_lookup_params
+
     _setup_logging(verbose)
     languages = [s.strip() for s in lang.split(",")] if lang else None
-    handle_name = _safe_name(handle.rstrip("/").split("/")[-1].lstrip("@")) or "channel"
+    # Derive the folder from the parsed handle so a full channel URL and a bare
+    # @handle land in the same place.
+    lookup = _channel_lookup_params(handle)
+    handle_name = _safe_name(lookup.get("forHandle", lookup.get("id", "")).lstrip("@")) or "channel"
     out_dir = Path(out) if out else Path("output") / handle_name
-    asyncio.run(_run_channel(handle, limit, thumbnails, subtitles, languages, out_dir))
+    asyncio.run(_run_channel(handle, limit, since, until, thumbnails, subtitles, languages, out_dir))
 
 
 def main():

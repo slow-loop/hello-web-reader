@@ -241,71 +241,86 @@ async def read_youtube(
         return ReadResult.fail(url, f"All strategies failed: {e}", source_type="youtube")
 
 
-async def resolve_channel_id(channel_id_or_handle: str) -> str:
-    """
-    Resolve a YouTube channel ID from a channel ID, handle, or URL via YouTube Data API v3.
-    Returns the channel ID (starting with "UC").
-    """
-    if channel_id_or_handle.startswith("UC") and len(channel_id_or_handle) == 24:
-        return channel_id_or_handle
+def _channel_lookup_params(channel_id_or_handle: str) -> dict[str, str]:
+    """Build channels.list lookup params from a channel ID, handle, or URL."""
+    value = channel_id_or_handle
+    if "youtube.com/" in value:
+        path = urlparse(value).path.strip("/")
+        if path.startswith("channel/"):
+            return {"id": path.split("/")[1]}
+        if path.startswith("@"):
+            # Drop trailing segments like /videos or /streams.
+            value = path.split("/")[0]
 
+    if value.startswith("UC") and len(value) == 24:
+        return {"id": value}
+    return {"forHandle": value if value.startswith("@") else f"@{value}"}
+
+
+async def fetch_channel_info(channel_id_or_handle: str) -> dict:
+    """
+    Resolve a channel ID, handle, or URL to {id, title, video_count} via
+    YouTube Data API v3.
+
+    The video_count is what lets callers report a channel's true size before
+    deciding how much of it to fetch, so a partial run can never look complete.
+    """
     api_key = os.environ.get("YOUTUBE_API_KEY")
     if not api_key:
-        raise ValueError("YOUTUBE_API_KEY environment variable is required to resolve channel IDs.")
+        raise ValueError("YOUTUBE_API_KEY environment variable is required to resolve channels.")
 
-    # Handle URLs
-    handle = channel_id_or_handle
-    if "youtube.com/" in handle:
-        parsed = urlparse(handle)
-        path = parsed.path.strip("/")
-        if path.startswith("@"):
-            handle = path
-        elif path.startswith("channel/"):
-            return path.split("/")[1]
-
-    if not handle.startswith("@"):
-        handle = f"@{handle}"
-
-    url = "https://www.googleapis.com/youtube/v3/channels"
     params = {
-        "part": "id",
-        "forHandle": handle,
-        "key": api_key
+        "part": "snippet,statistics",
+        "key": api_key,
+        **_channel_lookup_params(channel_id_or_handle),
     }
-    
     # Best practice: use gzip
     headers = {"Accept-Encoding": "gzip", "User-Agent": "web-reader (gzip)"}
 
-    logger.info(f"Resolving channel ID for {handle} via YouTube API...")
+    logger.info(f"Resolving channel {channel_id_or_handle} via YouTube API...")
     async with httpx.AsyncClient() as client:
-        resp = await client.get(url, params=params, headers=headers)
+        resp = await client.get(
+            "https://www.googleapis.com/youtube/v3/channels", params=params, headers=headers
+        )
         resp.raise_for_status()
-        data = resp.json()
+        items = resp.json().get("items") or []
 
-        if data.get("items") and len(data["items"]) > 0:
-            return data["items"][0]["id"]
-            
-    raise ValueError(f"Could not resolve channel ID for: {channel_id_or_handle}")
+    if not items:
+        raise ValueError(f"Could not resolve channel: {channel_id_or_handle}")
+
+    item = items[0]
+    return {
+        "id": item["id"],
+        "title": item.get("snippet", {}).get("title", ""),
+        "video_count": int(item.get("statistics", {}).get("videoCount", 0)),
+    }
 
 
-async def list_channel_videos(channel_id_or_handle: str, limit: int = 5) -> list[dict]:
+async def list_channel_videos(
+    channel_id_or_handle: str,
+    limit: int = 0,
+    since: str | None = None,
+    until: str | None = None,
+) -> list[dict]:
     """
-    List recent videos for a YouTube channel via YouTube Data API v3.
+    List a channel's videos, newest first, via YouTube Data API v3.
     Provides gzip optimization and field filtering to minimize payload size.
-    
+
     Args:
-        channel_id_or_handle: YouTube channel ID (UC...) or handle (@name).
-        limit: Max number of videos to return.
+        channel_id_or_handle: YouTube channel ID (UC...), handle (@name), or URL.
+        since: Only include videos published on/after this date (YYYY-MM-DD).
+        until: Only include videos published on/before this date (YYYY-MM-DD).
+        limit: Cap at N newest videos after date filtering. 0 means no cap.
     """
     api_key = os.environ.get("YOUTUBE_API_KEY")
     if not api_key:
         raise ValueError("YOUTUBE_API_KEY environment variable is required to list channel videos.")
 
-    channel_id = await resolve_channel_id(channel_id_or_handle)
-    
+    channel_id = channel_id_or_handle
+    if not (channel_id.startswith("UC") and len(channel_id) == 24):
+        channel_id = (await fetch_channel_info(channel_id_or_handle))["id"]
+
     # Convert Channel ID (UC...) to Uploads Playlist ID (UU...)
-    if not channel_id.startswith("UC"):
-        raise ValueError(f"Invalid Channel ID format: {channel_id}")
     uploads_playlist_id = "UU" + channel_id[2:]
 
     url = "https://www.googleapis.com/youtube/v3/playlistItems"
@@ -316,12 +331,11 @@ async def list_channel_videos(channel_id_or_handle: str, limit: int = 5) -> list
     next_page_token = None
 
     async with httpx.AsyncClient() as client:
-        while len(results) < limit:
-            page_size = min(limit - len(results), 50)
+        while True:
             params = {
                 "part": "snippet",
                 "playlistId": uploads_playlist_id,
-                "maxResults": page_size,
+                "maxResults": 50,
                 "key": api_key,
                 # Best practice: Use fields to optimize payload size
                 "fields": "nextPageToken,items(snippet(title,publishedAt,thumbnails,resourceId/videoId))"
@@ -339,14 +353,24 @@ async def list_channel_videos(channel_id_or_handle: str, limit: int = 5) -> list
                 if not video_id:
                     continue
 
+                published_at = snippet.get("publishedAt", "")
+                day = published_at[:10]
+                if (since and day < since) or (until and day > until):
+                    continue
+
                 results.append({
                     "id": video_id,
                     "title": snippet.get("title", ""),
                     "url": f"https://www.youtube.com/watch?v={video_id}",
-                    "published_at": snippet.get("publishedAt", ""),
+                    "published_at": published_at,
                     "thumbnail": _best_thumbnail(snippet.get("thumbnails", {})),
                 })
-            
+
+            # Items arrive newest-first, so the first `limit` matches are the
+            # newest `limit` matches — stop paging once we have them.
+            if limit and len(results) >= limit:
+                return results[:limit]
+
             next_page_token = data.get("nextPageToken")
             if not next_page_token:
                 break
