@@ -232,6 +232,14 @@ async def _dispatch(reader: str, url: Optional[str], params: dict) -> list[ReadR
             results.append(await read_podcast(uuid, vocabulary_terms=vocabulary_terms))
         return results
 
+    elif reader == "rss_podcast":
+        from .readers.rss_podcast import list_episodes, read_episode
+        limit = params.get("limit")
+        episodes = await list_episodes(url)
+        if limit:
+            episodes = episodes[:int(limit)]
+        return [await read_episode(ep) for ep in episodes]
+
     else:
         return [ReadResult.fail(url or f"{reader}://", f"Unknown reader: {reader}", source_type="unknown")]
 
