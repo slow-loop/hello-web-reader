@@ -27,6 +27,11 @@ app = typer.Typer(
     add_completion=False,
 )
 
+# Per-video pause between yt-dlp calls in `channel --subtitles`/`--transcribe`.
+# Firing one request after another with no gap reads as abuse to YouTube and
+# gets the whole session rate-limited for up to an hour.
+YTDLP_REQUEST_DELAY_SECONDS = 7
+
 def _print_results(results, output_format: str) -> None:
     print(format_results(results, output_format))
 
@@ -152,6 +157,10 @@ def _parse_iso_duration(iso: str) -> str:
     if hours:
         return f"{hours}:{minutes:02d}:{seconds:02d}"
     return f"{minutes}:{seconds:02d}"
+
+
+def _is_ytdlp_rate_limited(error: str | None) -> bool:
+    return "rate-limited" in (error or "").lower()
 
 
 def _duration_seconds(duration: str) -> int:
@@ -284,8 +293,12 @@ async def _run_channel(
             date = (r["published_at"] or "unknown")[:10]
             out_file = subs_dir / f"{date}_{r['video_id']}_{_safe_name(r['title'])}.md"
             result = await read_youtube(r["url"], languages=languages, use_audio_fallback=False)
+            await asyncio.sleep(YTDLP_REQUEST_DELAY_SECONDS)
             if not result.success:
                 print(f"  [{i}/{len(targets)}] FAILED {r['video_id']}: {result.error}")
+                if _is_ytdlp_rate_limited(result.error):
+                    print(f"  Stopping: YouTube rate-limited this session. {len(targets) - i} videos not attempted — rerun later.")
+                    break
                 continue
             out_file.write_text(result.text, encoding="utf-8")
             lang = result.language or "?"
@@ -311,8 +324,12 @@ async def _run_channel(
             out_file = tx_dir / f"{date}_{r['video_id']}_{_safe_name(r['title'])}.md"
             started = time.monotonic()
             result = await read_youtube(r["url"], languages=languages, use_audio_fallback=True)
+            await asyncio.sleep(YTDLP_REQUEST_DELAY_SECONDS)
             if not result.success:
                 print(f"  [{i}/{len(targets)}] FAILED {r['video_id']}: {result.error}")
+                if _is_ytdlp_rate_limited(result.error):
+                    print(f"  Stopping: YouTube rate-limited this session. {len(targets) - i} videos not attempted — rerun later.")
+                    break
                 continue
             out_file.write_text(result.text, encoding="utf-8")
             print(
