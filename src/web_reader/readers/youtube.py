@@ -208,7 +208,9 @@ async def read_youtube(
     # Strategy 1: yt-dlp subtitle tracks (manual or auto-generated)
     try:
         subtitle_result = _download_ytdlp_subtitles(url, video_id, languages)
-        if subtitle_result:
+        # An empty track is not a transcript — fall through to audio rather than
+        # return a "successful" empty result that callers would cache or write.
+        if subtitle_result and subtitle_result[0].strip():
             text, language, raw_vtt = subtitle_result
             res = _build_result(
                 video_id,
@@ -231,6 +233,10 @@ async def read_youtube(
     try:
         logger.info(f"Attempting AI transcription fallback for {video_id}...")
         transcript_text = await transcribe_youtube(url, vocabulary_terms=vocabulary_terms)
+        if not transcript_text.strip():
+            # Silent-video ASR yields nothing. Failing here keeps the caller from
+            # writing a header-only file that a resume would then skip forever.
+            return ReadResult.fail(url, "Transcription produced no text", source_type="youtube")
         return _build_result(
             video_id,
             transcript_text,
