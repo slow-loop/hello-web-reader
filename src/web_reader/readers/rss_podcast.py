@@ -76,6 +76,7 @@ class Episode(BaseModel):
     published_at: Optional[datetime] = None
     webpage_url: Optional[str] = None
     author: Optional[str] = None
+    duration_seconds: Optional[float] = None
 
 
 def _published_at(raw_entry) -> datetime | None:
@@ -85,6 +86,27 @@ def _published_at(raw_entry) -> datetime | None:
     if not parsed:
         return None
     return datetime(*parsed[:6], tzinfo=timezone.utc)
+
+
+def _duration_seconds(raw_entry) -> float | None:
+    """`<itunes:duration>` in seconds.
+
+    The tag is either a plain seconds count ("3902") or an [[HH:]MM:]SS clock
+    string ("1:05:02"), so accept both. Lets a caller price a batch of episodes
+    before downloading any of them — episode *count* is a poor proxy, since a
+    feed of 4-minute clips and a feed of 90-minute interviews look identical.
+    """
+    raw = raw_entry.get("itunes_duration")
+    if not raw:
+        return None
+    try:
+        parts = [float(p) for p in str(raw).strip().split(":")]
+    except ValueError:
+        return None
+    seconds = 0.0
+    for part in parts:
+        seconds = seconds * 60 + part
+    return seconds or None
 
 
 def _enclosure_url(raw_entry) -> str | None:
@@ -132,6 +154,7 @@ async def list_episodes(feed_url: str, timeout: float = 15.0) -> list[Episode]:
             published_at=_published_at(raw_entry),
             webpage_url=raw_entry.get("link"),
             author=raw_entry.get("author") or podcast_author or None,
+            duration_seconds=_duration_seconds(raw_entry),
         ))
 
     episodes.sort(key=lambda e: e.published_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
