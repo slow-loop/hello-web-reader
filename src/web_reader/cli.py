@@ -390,7 +390,7 @@ def channel(
     subtitles: bool = typer.Option(False, "--subtitles", help="Also fetch subtitle transcripts where available."),
     transcribe: bool = typer.Option(False, "--transcribe", help="Audio-transcribe the videos that have NO captions (slow, local ASR)."),
     lang: Optional[str] = typer.Option(None, help="Comma-separated preferred subtitle languages (e.g. 'zh-Hant,en')."),
-    out: Optional[str] = typer.Option(None, help="Output directory (default: ./output/<handle>)."),
+    out: Optional[str] = typer.Option(None, help="Output directory (default: ./output/youtube/<handle>)."),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
 ):
     """
@@ -414,7 +414,7 @@ def channel(
     # @handle land in the same place.
     lookup = _channel_lookup_params(handle)
     handle_name = _safe_name(lookup.get("forHandle", lookup.get("id", "")).lstrip("@")) or "channel"
-    out_dir = Path(out) if out else Path("output") / handle_name
+    out_dir = Path(out) if out else Path("output") / "youtube" / handle_name
     asyncio.run(
         _run_channel(handle, limit, since, until, thumbnails, subtitles, transcribe, languages, out_dir)
     )
