@@ -441,10 +441,12 @@ sources:
 def test_cli_reads_single_url_as_json(local_server: str, monkeypatch: pytest.MonkeyPatch, capsys):
     monkeypatch.setattr(
         "sys.argv",
-        ["web-reader", f"{local_server}/api/data.json", "--format=json"],
+        ["web-reader", "read", f"{local_server}/api/data.json", "--format=json"],
     )
 
-    cli_main()
+    with pytest.raises(SystemExit) as exc_info:
+        cli_main()
+    assert exc_info.value.code == 0
 
     output = capsys.readouterr().out
     data = json.loads(output)
@@ -475,10 +477,12 @@ sources:
 
     monkeypatch.setattr(
         "sys.argv",
-        ["web-reader", str(config_path), "--tags=web,rss", "--format=md", "--no-cache"],
+        ["web-reader", "config", str(config_path), "--tags=web,rss", "--format=md", "--no-cache"],
     )
 
-    cli_main()
+    with pytest.raises(SystemExit) as exc_info:
+        cli_main()
+    assert exc_info.value.code == 0
 
     output = capsys.readouterr().out
     assert "## Local Article" in output

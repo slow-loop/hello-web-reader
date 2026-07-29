@@ -46,7 +46,7 @@ def _has_funasr() -> bool:
 
 
 @pytest.mark.asyncio
-async def test_read_podcast_calls_pipeline_and_forwards_context(monkeypatch, tmp_path):
+async def test_read_podcast_calls_pipeline_and_forwards_vocabulary_terms(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
     mp3 = tmp_path / "episode.mp3"
@@ -64,15 +64,15 @@ async def test_read_podcast_calls_pipeline_and_forwards_context(monkeypatch, tmp
     )
     monkeypatch.setattr(apple_podcast, "get_episode", lambda uuid: fake_episode)
 
-    def fake_transcribe_audio(audio_path, context=None):
+    def fake_transcribe_audio(audio_path, vocabulary_terms=None):
         captured["audio_path"] = audio_path
-        captured["context"] = context
+        captured["vocabulary_terms"] = vocabulary_terms
         return "  polished transcript  "
 
     import web_reader.transcribe as transcribe_module
     monkeypatch.setattr(transcribe_module, "transcribe_audio", fake_transcribe_audio)
 
-    result = await apple_podcast.read_podcast("ep-123", context="Mandarin finance")
+    result = await apple_podcast.read_podcast("ep-123", vocabulary_terms=["Mandarin finance"])
 
     assert result.success is True
     assert result.text == "polished transcript"
@@ -81,7 +81,7 @@ async def test_read_podcast_calls_pipeline_and_forwards_context(monkeypatch, tmp
     assert result.raw["method"] == "sensevoice+openrouter"
     assert result.raw["episode_uuid"] == "ep-123"
     assert captured["audio_path"] == mp3
-    assert captured["context"] == "Mandarin finance"
+    assert captured["vocabulary_terms"] == ["Mandarin finance"]
 
 
 @pytest.mark.asyncio

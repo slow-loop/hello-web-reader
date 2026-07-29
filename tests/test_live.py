@@ -1,13 +1,20 @@
 """
 Live integration tests — requires network.
 
-Run all:     uv run pytest -m live
-Run one:     uv run pytest -m live tests/test_live.py::test_ptt_listing
+Run all:     RUN_WEB_READER_LIVE=1 uv run pytest -m live
+Run one:     RUN_WEB_READER_LIVE=1 uv run pytest -m live tests/test_live.py::test_ptt_listing
 """
+
+import os
 
 import pytest
 
-pytestmark = pytest.mark.live
+RUN_LIVE = os.getenv("RUN_WEB_READER_LIVE") == "1"
+
+pytestmark = [
+    pytest.mark.live,
+    pytest.mark.skipif(not RUN_LIVE, reason="set RUN_WEB_READER_LIVE=1 to run"),
+]
 
 
 # --- PTT ---

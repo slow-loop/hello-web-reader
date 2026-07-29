@@ -138,6 +138,13 @@ def _download_ytdlp_subtitles(url: str, video_id: str, languages: list[str]) -> 
                     if base_lang in languages:
                         languages.remove(base_lang)
                     languages.insert(0, base_lang)
+                # A manual (non-auto) track means an official transcript exists —
+                # request it even under a region code we didn't guess (YouTube
+                # labels the same "Traditional Chinese" video zh-Hant but its
+                # subtitle track zh-TW), so it isn't silently dropped downstream.
+                for lang in (info or {}).get("subtitles", {}):
+                    if lang not in languages:
+                        languages.append(lang)
         except Exception as e:
             logger.info(f"Failed to detect original language for {video_id}: {e}")
 
@@ -432,7 +439,10 @@ async def download_thumbnail(
 ) -> str | None:
     """Download a video's cover image to `dest`. Uses standard quality
     (hqdefault, 480x360), which exists for every video; falls back to the
-    API-provided URL. Returns the URL used, or None."""
+    API-provided URL. Returns the URL used, or None.
+
+    Works standalone for a single video_id too, no channel run or API key
+    needed — the hqdefault URL is a fixed i.ytimg.com path."""
     candidates = [f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"]
     if fallback_url:
         candidates.append(fallback_url)

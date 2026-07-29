@@ -29,7 +29,7 @@ async def test_read_youtube_prefers_ytdlp_subtitles(monkeypatch):
     monkeypatch.setattr(
         youtube,
         "_download_ytdlp_subtitles",
-        lambda url, video_id, languages: ("Hello\nWorld", "en"),
+        lambda url, video_id, languages: ("Hello\nWorld", "en", "WEBVTT\n..."),
     )
 
     async def fail_audio(url):
@@ -60,7 +60,7 @@ async def test_read_youtube_fails_without_audio_fallback_when_ytdlp_has_no_subti
 async def test_read_youtube_falls_back_to_audio(monkeypatch):
     monkeypatch.setattr(youtube, "_download_ytdlp_subtitles", lambda url, video_id, languages: None)
 
-    async def fake_audio(url):
+    async def fake_audio(url, vocabulary_terms=None):
         return "AI transcript text"
 
     monkeypatch.setattr(youtube, "transcribe_youtube", fake_audio)
@@ -97,9 +97,9 @@ async def test_transcribe_youtube_uses_pipeline(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    def fake_transcribe_audio(audio_path, context=None):
+    def fake_transcribe_audio(audio_path, vocabulary_terms=None):
         captured["audio_path"] = audio_path
-        captured["context"] = context
+        captured["vocabulary_terms"] = vocabulary_terms
         return "polished transcript"
 
     monkeypatch.setattr(youtube.tempfile, "TemporaryDirectory", lambda: DummyTempDir())
@@ -115,11 +115,11 @@ async def test_transcribe_youtube_uses_pipeline(monkeypatch):
     assert captured["urls"] == ["https://www.youtube.com/watch?v=abc123"]
     assert captured["opts"]["noprogress"] is True
     assert captured["audio_path"] == "/tmp/web-reader-test/audio.m4a"
-    assert captured["context"] is None
+    assert captured["vocabulary_terms"] is None
 
 
 @pytest.mark.asyncio
-async def test_transcribe_youtube_forwards_context(monkeypatch):
+async def test_transcribe_youtube_forwards_vocabulary_terms(monkeypatch):
     captured: dict[str, object] = {}
 
     class DummyYoutubeDL:
@@ -142,8 +142,8 @@ async def test_transcribe_youtube_forwards_context(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    def fake_transcribe_audio(audio_path, context=None):
-        captured["context"] = context
+    def fake_transcribe_audio(audio_path, vocabulary_terms=None):
+        captured["vocabulary_terms"] = vocabulary_terms
         return "ok"
 
     monkeypatch.setattr(youtube.tempfile, "TemporaryDirectory", lambda: DummyTempDir())
@@ -155,7 +155,7 @@ async def test_transcribe_youtube_forwards_context(monkeypatch):
 
     await youtube.transcribe_youtube(
         "https://www.youtube.com/watch?v=abc123",
-        context="Mandarin tech interview",
+        vocabulary_terms=["TSMC"],
     )
 
-    assert captured["context"] == "Mandarin tech interview"
+    assert captured["vocabulary_terms"] == ["TSMC"]
