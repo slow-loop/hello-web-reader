@@ -130,7 +130,7 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         video_path = args.video or download_video(args.url, Path(tmp))
-    timestamps = extract_frames(video_path, frames_dir, args.threshold, args.interval, args.skip_initial)
+        timestamps = extract_frames(video_path, frames_dir, args.threshold, args.interval, args.skip_initial)
 
     frame_count = len(list(frames_dir.glob("*.jpg")))
     if frame_count == 0:
