@@ -60,6 +60,47 @@ uv run web-reader "gnews://Fed interest rate?period=7d&max=10"
 
 > `gnews` 只回傳標題 + 來源 URL，不含全文。要拿全文請把 URL 再丟給 `web-reader`。
 
+### YouTube 頻道快照
+
+用 YouTube Data API 列出頻道所有影片與完整 metadata（需要 `YOUTUBE_API_KEY`）。
+預設純 API 呼叫、不下載任何東西；每次執行寫出帶時間戳的
+`videos_<stamp>.json` 與 `manifest_<stamp>.csv`，重跑不會覆蓋舊快照。
+
+```bash
+# 只抓 metadata（預設列整個頻道；--since/--until 選日期窗口，--limit 取最新 N 部）
+uv run web-reader channel @example --limit 50
+
+# 加抓封面圖 / 字幕（已存在的自動跳過，中斷可續跑）
+uv run web-reader channel @example --limit 50 --thumbnails
+uv run web-reader channel @example --limit 50 --subtitles --lang zh-Hant,en
+
+# 對沒有字幕的影片跑本機 ASR 轉錄（慢）
+uv run web-reader channel @example --subtitles --transcribe
+```
+
+輸出在 `./output/youtube/<handle>/`（字幕進 `subtitles/`、ASR 逐字稿進 `transcripts/`）。
+
+### Watchlist 增量抓取（fetch）
+
+常態性的採集入口：讀一份 watchlist（feeds.yaml 格式），把窗口內的新內容
+抓進 `output/` archive，存成帶 frontmatter 的 markdown（佈局契約在
+`web_reader.archive`）。已入檔的項目永不重抓，窗口重疊是免費的。
+
+- `rss` → 文章全文 → `output/substack/<id>/`
+- `rss_podcast` → 下載音檔 + 本機 ASR → `output/podcast/<id>/`（音檔留在 `audio/`）
+- `youtube_channel` → 抓字幕，無字幕自動 ASR fallback →
+  `output/youtube/<handle>/{subtitles,transcripts}/`
+
+```bash
+uv run web-reader fetch path/to/watchlist.yaml   # 預設抓最近 24h
+uv run web-reader fetch path/to/watchlist.yaml --since -7d --dry-run
+uv run web-reader fetch path/to/watchlist.yaml --source some-id --limit 10
+```
+
+watchlist 路徑由呼叫端明確傳入，任何 repo 都能指定自己的清單；輸出一律
+落在本 repo 的 `output/`。`--limit` 限制每個來源的「新」昂貴抓取次數
+（ASR / yt-dlp）；`--dry-run` 先估算這批的成本（worst-case ASR 時數）再決定。
+
 ### YAML 設定檔（批次抓取）
 
 ```bash
@@ -84,6 +125,7 @@ uv run web-reader feeds.yaml --format=md --no-cache
 | `json` | JSON API endpoint |
 | `email` | IMAP 信箱 |
 | `apple_podcast` | Apple Podcast（Mac 限定，需本機已下載集數） |
+| `rss_podcast` | Podcast RSS feed——下載音檔、本機 SenseVoice ASR 轉錄 |
 
 ### 選項
 
