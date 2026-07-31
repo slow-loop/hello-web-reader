@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Incrementally back up the output/ archive to Google Drive.
+# Incrementally back up the output/ store to a local backup destination
+# (e.g. a Google Drive desktop sync folder).
 #
-# Default destination:
-#   ~/Library/CloudStorage/GoogleDrive-w121211@gmail.com/My Drive/backup/hello-web-reader-archive/
+# No default destination — set BACKUP_DIR in .env (gitignored) or pass
+# --backup-dir explicitly. See .env.example.
 #
 # The archive is append-only: files are written once and never modified. So
 # instead of re-uploading a full snapshot each time, every run packs ONLY the
@@ -21,40 +22,46 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: scripts/backup_archive.sh [options]
+usage: scripts/backup_store.sh [options]
 
 Options:
-  --dest-root DIR   Backup destination. Default: Google Drive
-                    backup/hello-web-reader-archive/.
+  --backup-dir DIR  Backup destination. Required (via this flag, BACKUP_DIR
+                    in .env, or BACKUP_DIR in the environment).
   --part-size SIZE  split(1) part size. Default: 1000m.
   --full            Pack the whole archive, ignoring the LAST_BACKUP stamp
                     (re-baseline; part-set folder gets a -full suffix).
   --dry-run         Show what would be packed; write nothing.
   -h, --help        Show this help.
 
-Environment overrides: DEST_ROOT, PART_SIZE
+Environment overrides: BACKUP_DIR, PART_SIZE
 
 Examples:
-  scripts/backup_archive.sh --dry-run
-  scripts/backup_archive.sh
-  scripts/backup_archive.sh --full
+  scripts/backup_store.sh --dry-run
+  scripts/backup_store.sh
+  scripts/backup_store.sh --full
 EOF
 }
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT_DIR="$REPO_ROOT/output"
 
-DEFAULT_DEST_ROOT="$HOME/Library/CloudStorage/GoogleDrive-w121211@gmail.com/My Drive/backup/hello-web-reader-archive"
-DEST_ROOT="${DEST_ROOT:-$DEFAULT_DEST_ROOT}"
+if [ -f "$REPO_ROOT/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/.env"
+  set +a
+fi
+
+BACKUP_DIR="${BACKUP_DIR:-}"
 PART_SIZE="${PART_SIZE:-1000m}"
 FULL=0
 DRY_RUN=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --dest-root)
-      DEST_ROOT="${2:-}"
-      [ -n "$DEST_ROOT" ] || { echo "missing value for --dest-root" >&2; exit 2; }
+    --backup-dir)
+      BACKUP_DIR="${2:-}"
+      [ -n "$BACKUP_DIR" ] || { echo "missing value for --backup-dir" >&2; exit 2; }
       shift 2
       ;;
     --part-size)
@@ -69,9 +76,10 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+[ -n "$BACKUP_DIR" ] || { echo "BACKUP_DIR not set — pass --backup-dir, or set BACKUP_DIR in .env or the environment" >&2; exit 2; }
 [ -d "$OUTPUT_DIR" ] || { echo "output/ not found: $OUTPUT_DIR" >&2; exit 1; }
 
-STAMP_FILE="$DEST_ROOT/LAST_BACKUP.txt"
+STAMP_FILE="$BACKUP_DIR/LAST_BACKUP.txt"
 MODE="incremental"
 if [ "$FULL" = "1" ] || [ ! -f "$STAMP_FILE" ]; then
   MODE="full"
@@ -105,8 +113,8 @@ if [ "$MODE" = "incremental" ]; then
   window_note="files newer than $(tail -1 "$STAMP_FILE" 2>/dev/null || echo "?")"
 fi
 
-echo "archive:      $OUTPUT_DIR"
-echo "destination:  $DEST_ROOT"
+echo "store:        $OUTPUT_DIR"
+echo "destination:  $BACKUP_DIR"
 echo "mode:         $MODE ($window_note)"
 echo "to pack:      $n_files file(s), $human_size"
 
@@ -124,7 +132,7 @@ fi
 
 SET_NAME="$(date +%Y-%m-%d-%H%M)"
 [ "$MODE" = "full" ] && SET_NAME="$SET_NAME-full"
-SET_DIR="$DEST_ROOT/parts/$SET_NAME"
+SET_DIR="$BACKUP_DIR/parts/$SET_NAME"
 if [ -e "$SET_DIR" ]; then
   echo "part-set already exists: $SET_DIR" >&2
   exit 1
@@ -134,7 +142,7 @@ mkdir -p "$SET_DIR"
 cp "$FILELIST" "$SET_DIR/FILELIST.txt"
 
 {
-  echo "hello-web-reader archive backup part-set"
+  echo "hello-web-reader store backup part-set"
   echo
   echo "set_name: $SET_NAME"
   echo "created_at: $(date '+%Y-%m-%d %H:%M:%S %Z')"
@@ -159,15 +167,15 @@ echo "writing checksums..."
 printf '%s\n' "last successful backup (this file's mtime is the incremental cutoff)" \
   "$(date '+%Y-%m-%d %H:%M:%S %Z')" > "$STAMP_FILE"
 
-cat > "$DEST_ROOT/RESTORE.md" <<EOF
-# Restore the hello-web-reader output/ archive
+cat > "$BACKUP_DIR/RESTORE.md" <<EOF
+# Restore the hello-web-reader output/ store
 
 Part-sets under \`parts/\` are cumulative and append-only. To restore, extract
 ALL of them in chronological (lexical) folder order into the repo root:
 
 \`\`\`sh
 cd "/path/to/hello-web-reader"
-for d in "$DEST_ROOT/parts"/*/; do
+for d in "$BACKUP_DIR/parts"/*/; do
   cat "\$d"archive.tar.part-* | tar -xf - -C .
 done
 \`\`\`
@@ -175,7 +183,7 @@ done
 Verify any single part-set first:
 
 \`\`\`sh
-cd "$DEST_ROOT/parts/<set>" && shasum -a 256 -c SHA256SUMS.txt
+cd "$BACKUP_DIR/parts/<set>" && shasum -a 256 -c SHA256SUMS.txt
 \`\`\`
 
 Notes:

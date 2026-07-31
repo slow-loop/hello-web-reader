@@ -10,7 +10,7 @@ from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
-from . import ReadStore, read_url as read_url_impl
+from . import ReadCache, read_url as read_url_impl
 from .formatting import flatten_results_map, format_results
 from .runner import run_config
 
@@ -57,7 +57,7 @@ def build_server():
         output_format: OutputFormat = "md",
         no_cache: bool = False,
     ) -> str:
-        store = None if no_cache else ReadStore()
+        store = None if no_cache else ReadCache()
         result = await read_url_impl(url, store=store, cache_ttl=3600)
         return format_results([result], output_format)
 
@@ -81,7 +81,7 @@ def build_server():
         no_cache: bool = False,
     ) -> str:
         resolved = Path(config_path).resolve()
-        store = None if no_cache else ReadStore()
+        store = None if no_cache else ReadCache()
         results_map = await run_config(
             str(resolved),
             tags=_parse_tags(tags),
@@ -102,7 +102,7 @@ def build_server():
     ) -> str:
         from .readers.substack import search_substack as _search
 
-        store = None if no_cache else ReadStore()
+        store = None if no_cache else ReadCache()
         result = await _search(query, page=page, filter_type=filter_type)
         if store and result.success:
             store.save(result)
@@ -118,7 +118,7 @@ def build_server():
     ) -> str:
         from .readers.substack import explore_substack as _explore
 
-        store = None if no_cache else ReadStore()
+        store = None if no_cache else ReadCache()
         result = await _explore(tab=tab)
         if store and result.success:
             store.save(result)

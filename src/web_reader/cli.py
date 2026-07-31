@@ -19,9 +19,9 @@ from urllib.parse import parse_qs
 
 import typer
 
-from .archive import Archive, safe_name as _safe_name
+from .store import Store, safe_name as _safe_name
 from .formatting import flatten_results_map, format_results
-from .store import ReadStore
+from .cache import ReadCache
 
 app = typer.Typer(
     help="Lightweight web reader — fetch structured content from URLs and feeds.",
@@ -52,7 +52,7 @@ async def _run_url(
     from ._detect import detect_source_type
 
     source_type = detect_source_type(url)
-    store = ReadStore() if not no_cache else None
+    store = ReadCache() if not no_cache else None
 
     if store and source_type != "rss":
         cached = store.get_cached(url, ttl_seconds=3600, source_type=source_type)
@@ -272,15 +272,15 @@ async def _run_channel(
                 status = "ok" if used else "FAILED"
                 print(f"  [{i}/{len(rows)}] {status} {r['video_id']}")
 
-    # Transcript storage goes through the archive contract (frontmatter,
+    # Transcript storage goes through the store contract (frontmatter,
     # canonical paths, global dedupe by video id) — the same layout `fetch`
     # writes and downstream consumers read. --out only moves the snapshot
     # files above, never the transcripts.
-    archive = Archive()
+    store = Store()
 
     async def _save_transcripts(targets: list[dict], use_audio: bool) -> None:
         for i, r in enumerate(targets, 1):
-            if archive.has_youtube(r["video_id"]):
+            if store.has_youtube(r["video_id"]):
                 print(f"  [{i}/{len(targets)}] exists, skipping {r['video_id']}")
                 continue
             started = time.monotonic()
@@ -299,7 +299,7 @@ async def _run_channel(
             # A caption-less video may still resolve via captions after all
             # (auto-generated tracks) — file it by what actually happened.
             actual_kind = "subtitles" if method == "yt-dlp-subs" else "transcripts"
-            path = archive.save_youtube(
+            path = store.save_youtube(
                 out_dir.name, actual_kind, r["video_id"], r["title"], published,
                 result.text, language=result.language, method=method,
             )
@@ -312,7 +312,7 @@ async def _run_channel(
         targets = [r for r in rows if r["caption"] == "true"]
         print(
             f"\nSubtitles: {len(targets)}/{len(rows)} videos have captions "
-            f"(est. ~{max(1, round(len(targets) * 3 / 60))} min) -> {archive.youtube_dir(out_dir.name) / 'subtitles'}"
+            f"(est. ~{max(1, round(len(targets) * 3 / 60))} min) -> {store.youtube_dir(out_dir.name) / 'subtitles'}"
         )
         await _save_transcripts(targets, use_audio=False)
 
@@ -324,7 +324,7 @@ async def _run_channel(
         audio_min = sum(_duration_seconds(r["duration"]) for r in targets) / 60
         print(
             f"\nTranscripts: {len(targets)}/{len(rows)} videos have no captions, "
-            f"{audio_min / 60:.1f}h of audio -> {archive.youtube_dir(out_dir.name) / 'transcripts'}"
+            f"{audio_min / 60:.1f}h of audio -> {store.youtube_dir(out_dir.name) / 'transcripts'}"
         )
         await _save_transcripts(targets, use_audio=True)
 
@@ -335,7 +335,7 @@ async def _run_config(config_path: str, tags: list[str] | None, no_cache: bool, 
     """Run a YAML config file."""
     from .runner import run_config
 
-    store = ReadStore() if not no_cache else None
+    store = ReadCache() if not no_cache else None
     results_map = await run_config(config_path, tags=tags, no_cache=no_cache, store=store)
     _print_results(flatten_results_map(results_map), output_format)
 
@@ -381,7 +381,7 @@ def channel(
     subtitles: bool = typer.Option(False, "--subtitles", help="Also fetch subtitle transcripts where available."),
     transcribe: bool = typer.Option(False, "--transcribe", help="Audio-transcribe the videos that have NO captions (slow, local ASR)."),
     lang: Optional[str] = typer.Option(None, help="Comma-separated preferred subtitle languages (e.g. 'zh-Hant,en')."),
-    out: Optional[str] = typer.Option(None, help="Directory for snapshot files (manifest/videos/thumbnails); default ./output/youtube/<handle>. Subtitle/ASR transcripts always land in the output/ archive."),
+    out: Optional[str] = typer.Option(None, help="Directory for snapshot files (manifest/videos/thumbnails); default ./output/youtube/<handle>. Subtitle/ASR transcripts always land in the output/ store."),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
 ):
     """
@@ -421,7 +421,7 @@ def fetch(
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
 ):
     """
-    Incrementally fetch watchlist sources into the output/ archive.
+    Incrementally fetch watchlist sources into the output/ store.
 
     The recurring acquisition step: rss articles into output/substack/,
     podcast ASR transcripts into output/podcast/, YouTube captions (with ASR

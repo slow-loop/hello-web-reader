@@ -84,7 +84,7 @@ uv run web-reader channel @example --subtitles --transcribe
 
 常態性的採集入口：讀一份 watchlist（feeds.yaml 格式），把窗口內的新內容
 抓進 `output/` archive，存成帶 frontmatter 的 markdown（佈局契約在
-`web_reader.archive`）。已入檔的項目永不重抓，窗口重疊是免費的。
+`web_reader.store`）。已入檔的項目永不重抓，窗口重疊是免費的。
 
 - `rss` → 文章全文 → `output/substack/<id>/`
 - `rss_podcast` → 下載音檔 + 本機 ASR → `output/podcast/<id>/`（音檔留在 `audio/`）
@@ -157,10 +157,10 @@ result = await read_ptt("https://www.ptt.cc/bbs/Stock/index.html")
 result = await read_ptt("https://www.ptt.cc/bbs/Stock/search?q=台積電")
 result = await read_ptt("https://www.ptt.cc/bbs/Stock/M.xxx.html")
 
-# 加 cache（預設跨專案共用：~/Library/Caches/web-reader/store.db）
-from web_reader import ReadStore
-store = ReadStore()
-result = await read_url("https://example.com", store=store, cache_ttl=3600)
+# 加 cache（預設跨專案共用：~/Library/Caches/web-reader/cache.db）
+from web_reader import ReadCache
+cache = ReadCache()
+result = await read_url("https://example.com", store=cache, cache_ttl=3600)
 ```
 
 ## MCP Server

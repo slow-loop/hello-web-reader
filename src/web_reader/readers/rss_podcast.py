@@ -52,7 +52,7 @@ def resolve_default_audio_dir() -> Path:
       Linux:   ~/.cache/web-reader/audio   (XDG)
 
     Override with the WEB_READER_AUDIO_DIR env var, or the read_episode
-    audio_dir argument. Consistent with ReadStore's WEB_READER_DB_PATH.
+    audio_dir argument. Consistent with ReadCache's WEB_READER_DB_PATH.
     """
     configured = os.environ.get(DEFAULT_AUDIO_DIR_ENV)
     if configured:

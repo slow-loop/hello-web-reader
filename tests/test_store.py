@@ -1,116 +1,92 @@
-"""Tests for ReadStore (SQLite cache)."""
+"""Tests for the output/ store layout contract."""
 
-import tempfile
-from pathlib import Path
+from datetime import datetime, timezone
 
-from web_reader.models import ReadResult
-from web_reader.store import ReadStore
+import pytest
+
+from web_reader.store import Store, guid_slug, url_slug
 
 
-def test_save_and_retrieve():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = ReadStore(db_path=Path(tmpdir) / "test.db")
+@pytest.fixture
+def store(tmp_path):
+    return Store(tmp_path)
 
-        result = ReadResult(
-            url="https://example.com/test",
-            text="Hello world",
-            title="Test Page",
-            source_type="web",
+
+DT = datetime(2026, 7, 30, 8, 0, tzinfo=timezone.utc)
+
+
+class TestYouTube:
+    def test_save_and_find_roundtrip(self, store):
+        store.save_youtube(
+            "somechannel", "subtitles", "abcDEF12345", "測試 Title: 50%",
+            DT, "hello world", language="zh", method="yt-dlp-subs",
         )
+        item = store.find_youtube("abcDEF12345")
+        assert item is not None
+        assert item.url == "https://www.youtube.com/watch?v=abcDEF12345"
+        assert item.title == "測試 Title: 50%"
+        assert item.published_at == DT
+        assert item.text == "hello world"
+        assert item.extra["method"] == "yt-dlp-subs"
 
-        record_id = store.save(result)
-        assert record_id
+    def test_subtitles_and_transcripts_are_separate_dirs(self, store):
+        p1 = store.save_youtube("ch", "subtitles", "aaaaaaaaaaa", "t", DT, "x")
+        p2 = store.save_youtube("ch", "transcripts", "bbbbbbbbbbb", "t", DT, "x")
+        assert p1.parent.name == "subtitles"
+        assert p2.parent.name == "transcripts"
 
-        cached = store.get_cached("https://example.com/test", source_type="web")
-        assert cached is not None
-        assert cached.text == "Hello world"
-        assert cached.cached is True
+    def test_file_without_frontmatter_still_loads(self, store):
+        subs = store.root / "youtube" / "ch" / "subtitles"
+        subs.mkdir(parents=True)
+        (subs / "2026-01-05_rawvideoid1_old style.md").write_text("VIDEO_ID: rawvideoid1\nTRANSCRIPT:\nhi")
+        item = store.find_youtube("rawvideoid1")
+        assert item.text.startswith("VIDEO_ID:")
+        assert item.published_at.date().isoformat() == "2026-01-05"
 
+    def test_list_youtube_since_filters_by_filename_date(self, store):
+        store.save_youtube("ch", "subtitles", "aaaaaaaaaaa", "old", datetime(2025, 1, 1, tzinfo=timezone.utc), "x")
+        store.save_youtube("ch", "transcripts", "bbbbbbbbbbb", "new", DT, "y")
+        items = store.list_youtube("ch", since_date="2026-01-01")
+        assert [i.title for i in items] == ["new"]
 
-def test_cache_miss():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = ReadStore(db_path=Path(tmpdir) / "test.db")
-        cached = store.get_cached("https://nonexistent.com")
-        assert cached is None
-
-
-def test_ttl_expiry():
-    """Test that TTL=0 means everything is expired."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = ReadStore(db_path=Path(tmpdir) / "test.db")
-
-        result = ReadResult(
-            url="https://example.com/ttl-test",
-            text="Old content",
-            source_type="web",
-        )
-        store.save(result)
-
-        # TTL=0 should not return cached result
-        cached = store.get_cached("https://example.com/ttl-test", ttl_seconds=0)
-        assert cached is None
-
-
-def test_list_records():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = ReadStore(db_path=Path(tmpdir) / "test.db")
-
-        for i in range(3):
-            store.save(ReadResult(
-                url=f"https://example.com/{i}",
-                text=f"Content {i}",
-                source_type="rss",
-            ))
-
-        records = store.list_records(source_type="rss")
-        assert len(records) == 3
+    def test_missing_video_returns_none(self, store):
+        assert store.find_youtube("nosuchvid00") is None
+        assert not store.has_youtube("nosuchvid00")
 
 
-def test_search_text():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = ReadStore(db_path=Path(tmpdir) / "test.db")
+class TestPodcast:
+    GUID = "https://firstory.me/ep/xyz?a=1"
 
-        store.save(ReadResult(url="https://a.com", text="NVDA earnings report", source_type="web"))
-        store.save(ReadResult(url="https://b.com", text="AAPL new product launch", source_type="web"))
+    def test_save_and_dedup_by_guid(self, store):
+        store.save_podcast("gooaye", self.GUID, "EP1", DT, "body", webpage_url="https://x")
+        assert store.has_podcast(self.GUID)
+        assert not store.has_podcast("other-guid")
 
-        results = store.search_text("NVDA")
-        assert len(results) == 1
-        assert "NVDA" in results[0].text
+    def test_list_carries_podcast_url_scheme(self, store):
+        store.save_podcast("gooaye", self.GUID, "EP1", DT, "body")
+        [item] = store.list_podcast("gooaye")
+        assert item.url == f"podcast://{self.GUID}"
+        assert item.extra["guid"] == self.GUID
 
-
-def test_upsert_rss_entries_and_list():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = ReadStore(db_path=Path(tmpdir) / "test.db")
-        feed_url = "https://example.com/feed"
-
-        first = ReadResult(
-            url="https://example.com/posts/1",
-            title="First",
-            text="First body",
-            source_type="rss",
-            raw={"entry_id": "https://example.com/posts/1"},
-        )
-        second = ReadResult(
-            url="https://example.com/posts/2",
-            title="Second",
-            text="Second body",
-            source_type="rss",
-            raw={"entry_id": "https://example.com/posts/2"},
-        )
-
-        store.upsert_rss_entries(feed_url, [first, second])
-        store.upsert_rss_entries(feed_url, [first])
-
-        results = store.list_rss_entries(feed_url)
-        assert len(results) == 2
-        assert all(result.cached is True for result in results)
+    def test_audio_dir_is_inside_source_dir(self, store):
+        assert store.podcast_audio_dir("gooaye") == store.podcast_dir("gooaye") / "audio"
 
 
-def test_rss_feed_is_fresh_after_touch():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = ReadStore(db_path=Path(tmpdir) / "test.db")
-        feed_url = "https://example.com/feed"
+class TestArticles:
+    URL = "https://kp.substack.com/p/some-post"
 
-        assert store.rss_feed_is_fresh(feed_url, ttl_seconds=900) is False
-        store.touch_rss_feed(feed_url)
-        assert store.rss_feed_is_fresh(feed_url, ttl_seconds=900) is True
+    def test_save_and_dedup_by_url(self, store):
+        store.save_article("kp", self.URL, "Post", DT, "body")
+        assert store.has_article("kp", self.URL)
+        assert not store.has_article("kp", "https://kp.substack.com/p/other")
+        assert not store.has_article("elsewhere", self.URL)
+
+    def test_list_articles_roundtrip(self, store):
+        store.save_article("kp", self.URL, "Post", DT, "body text")
+        [item] = store.list_articles("kp")
+        assert (item.url, item.title, item.text) == (self.URL, "Post", "body text")
+
+
+def test_slugs_are_filesystem_safe():
+    assert "/" not in guid_slug("https://a/b?c=1")
+    assert url_slug("https://kp.substack.com/p/hello-world/") == "hello-world"

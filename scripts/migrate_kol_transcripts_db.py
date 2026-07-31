@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """One-off: export kol_mvp's podcast transcript cache into the output/ archive.
 
-Reads rss_podcast rows from hello-note's `.cache/transcripts.db` (a ReadStore
+Reads rss_podcast rows from hello-note's `.cache/transcripts.db` (a ReadCache
 SQLite file) and writes each as `output/podcast/<source_id>/<date>_<guid>.md`
-via web_reader.archive. The source id is recovered from the cached audio path
+via web_reader.store. The source id is recovered from the cached audio path
 (`podcast_audio/<source_id>/…`). The db itself is left untouched — retire it
 once nothing reads it anymore.
 
@@ -24,7 +24,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from web_reader.archive import Archive  # noqa: E402
+from web_reader.store import Store  # noqa: E402
 
 DEFAULT_DB = REPO_ROOT.parent / "hello-note" / "scripts" / "kol_mvp" / ".cache" / "transcripts.db"
 
@@ -49,7 +49,7 @@ def main() -> int:
     by_url = {r[0]: r for r in rows}
     print(f"{len(rows)} row(s), {len(by_url)} unique episode(s).")
 
-    archive = Archive()
+    archive = Store()
     n_new = n_existing = n_skipped = 0
     per_source: dict[str, int] = {}
 

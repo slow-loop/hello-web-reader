@@ -103,8 +103,8 @@ async def test_read_podcast_returns_fail_when_episode_missing(monkeypatch):
 @pytest.mark.skipif(not os.environ.get("OPENROUTER_API_KEY"), reason="OPENROUTER_API_KEY not set")
 @pytest.mark.skipif(not _has_funasr(), reason="funasr not installed (pip install web-reader[transcribe])")
 async def test_read_podcast_round_trip_with_readstore(tmp_path):
-    """Transcribe once, persist to ReadStore, re-read from cache without re-running the pipeline."""
-    from web_reader.store import ReadStore
+    """Transcribe once, persist to ReadCache, re-read from cache without re-running the pipeline."""
+    from web_reader.cache import ReadCache
 
     episodes = apple_podcast.list_episodes()
     if not episodes:
@@ -112,7 +112,7 @@ async def test_read_podcast_round_trip_with_readstore(tmp_path):
 
     # pick the smallest mp3 so the live call is fast
     target = min(episodes, key=lambda e: e.mp3_path.stat().st_size)
-    store = ReadStore(db_path=tmp_path / "cache.sqlite")
+    store = ReadCache(db_path=tmp_path / "cache.sqlite")
     url = f"apple-podcast://{target.uuid}"
 
     # 1st pass: cache miss, real transcription

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from web_reader import ReadStore, read_url, read_urls
+from web_reader import ReadCache, read_url, read_urls
 from web_reader.cli import main as cli_main
 from web_reader.readers.json_api import read_json
 from web_reader.readers.reddit import read_reddit
@@ -328,7 +328,7 @@ async def test_read_reddit_thread_local_server(local_server: str):
 
 @pytest.mark.asyncio
 async def test_read_url_uses_cache_with_real_store(local_server: str, tmp_path: Path):
-    store = ReadStore(tmp_path / "cache.db")
+    store = ReadCache(tmp_path / "cache.db")
     url = f"{local_server}/article"
 
     first = await read_url(url, store=store)
@@ -390,7 +390,7 @@ sources:
         encoding="utf-8",
     )
 
-    store = ReadStore(tmp_path / "runner.db")
+    store = ReadCache(tmp_path / "runner.db")
 
     first = await run_config(str(config_path), tags=["smoke"], store=store)
     second = await run_config(str(config_path), tags=["smoke"], store=store)

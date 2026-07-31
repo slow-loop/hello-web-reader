@@ -8,7 +8,7 @@ from typing import Optional
 
 from .config import FeedConfig, SourceConfig, load_config
 from .models import ReadResult
-from .store import ReadStore
+from .cache import ReadCache
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ def _filter_rss_results(
 
 async def _run_rss_source(
     source: SourceConfig,
-    store: Optional[ReadStore],
+    store: Optional[ReadCache],
     no_cache: bool,
 ) -> list[ReadResult]:
     from .readers.rss import fetch_rss_entries
@@ -91,7 +91,7 @@ async def _run_rss_source(
     )
 
 
-async def _run_source(source: SourceConfig, store: Optional[ReadStore], no_cache: bool) -> list[ReadResult]:
+async def _run_source(source: SourceConfig, store: Optional[ReadCache], no_cache: bool) -> list[ReadResult]:
     """Run a single source config and return results."""
     reader = source.reader.lower()
     url = source.url
@@ -249,7 +249,7 @@ async def run_config(
     *,
     tags: Optional[list[str]] = None,
     no_cache: bool = False,
-    store: Optional[ReadStore] = None,
+    store: Optional[ReadCache] = None,
 ) -> dict[str, list[ReadResult]]:
     """
     Run a feeds.yaml config and return results grouped by source name.
@@ -258,12 +258,12 @@ async def run_config(
         config_path: Path to the YAML config file.
         tags: If set, only run sources that have at least one matching tag.
         no_cache: Skip cache for all sources.
-        store: ReadStore for caching. Created automatically if None.
+        store: ReadCache for caching. Created automatically if None.
     """
     config = load_config(config_path)
 
     if store is None and not no_cache:
-        store = ReadStore()
+        store = ReadCache()
 
     sources = config.sources
     if tags:

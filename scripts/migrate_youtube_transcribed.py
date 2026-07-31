@@ -3,7 +3,7 @@
 
 Three legacy shapes exist(ed) on disk, all moved to
 `{subtitles,transcripts}/<date>_<video_id>_<title>.md` with frontmatter
-(see web_reader.archive):
+(see web_reader.store):
 
   transcribed/<video_id>.md          — YAML frontmatter + "# Transcript" body → transcripts/
   transcribed/<date>_<title>.md      — read_youtube text; VIDEO_ID: in body   → transcripts/
@@ -40,7 +40,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from dotenv import load_dotenv  # noqa: E402
 
-from web_reader.archive import Archive, _split_frontmatter  # noqa: E402
+from web_reader.store import Store, _split_frontmatter  # noqa: E402
 
 _VIDEO_ID_STEM = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _VIDEO_ID_IN_BODY = re.compile(r"^VIDEO_ID:\s*(\S+)", re.MULTILINE)
@@ -50,7 +50,7 @@ _DATE_PREFIX = re.compile(r"^(\d{4}-\d{2}-\d{2})_(.*)$")
 _ASR_LANG = re.compile(r"^LANG:\s*ai-transcribed\s*$", re.MULTILINE)
 
 
-def _scan(archive: Archive) -> list[dict]:
+def _scan(archive: Store) -> list[dict]:
     """All legacy files with what we can learn without the API."""
     yt = archive.root / "youtube"
     legacy = [(p, "transcripts") for p in sorted(yt.glob("*/transcribed/*.md"))]
@@ -100,7 +100,7 @@ async def main() -> int:
     args = parser.parse_args()
 
     load_dotenv(REPO_ROOT / ".env", override=False)
-    archive = Archive()
+    archive = Store()
     entries = _scan(archive)
     if not entries:
         print("Nothing to migrate.")

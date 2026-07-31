@@ -93,7 +93,7 @@ unless `--out` is given. Re-running skips thumbnails/subtitles already on disk.
 
 The recurring acquisition step: read a watchlist (feeds.yaml format), fetch
 whatever is new in the window, and archive it under `output/` as markdown with
-frontmatter (layout contract in `web_reader.archive`). Already-archived items
+frontmatter (layout contract in `web_reader.store`). Already-archived items
 are never re-fetched, so overlapping windows are free.
 
 - `rss` → article full text → `output/substack/<id>/`
@@ -168,10 +168,10 @@ result = await read_ptt("https://www.ptt.cc/bbs/Stock/index.html")
 result = await read_ptt("https://www.ptt.cc/bbs/Stock/search?q=台積電")
 result = await read_ptt("https://www.ptt.cc/bbs/Stock/M.xxx.html")
 
-# With cache (shared across projects by default: ~/Library/Caches/web-reader/store.db)
-from web_reader import ReadStore
-store = ReadStore()
-result = await read_url("https://example.com", store=store, cache_ttl=3600)
+# With cache (shared across projects by default: ~/Library/Caches/web-reader/cache.db)
+from web_reader import ReadCache
+cache = ReadCache()
+result = await read_url("https://example.com", store=cache, cache_ttl=3600)
 ```
 
 ## Scripts

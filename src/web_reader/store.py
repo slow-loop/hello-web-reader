@@ -1,380 +1,313 @@
-"""
-ReadStore — SQLModel-based cache for read results.
+"""Store — the file-layout contract for `output/`.
 
-Uses SQLite via SQLModel/SQLAlchemy for:
-- Fast "have I read this URL before?" lookups
-- TTL-based cache expiry
-- Text search across all cached content
-- Listing/filtering by source type, date, etc.
+`output/` is the permanent home of fetched raw content: everything web-reader
+fetches lands here as human-readable markdown, and downstream consumers (e.g.
+the hello-note KOL pipeline) read it back exclusively through this module.
+No other code should hard-code the layout — writer and reader sharing this
+file is what keeps them from drifting apart.
+
+Layout, one directory per source:
+
+    output/youtube/<channel>/subtitles/<YYYY-MM-DD>_<video_id>_<title>.md
+    output/youtube/<channel>/transcripts/<YYYY-MM-DD>_<video_id>_<title>.md
+    output/podcast/<source_id>/<YYYY-MM-DD>_<guid_slug>.md
+    output/podcast/<source_id>/audio/<audio files>
+    output/substack/<source_id>/<YYYY-MM-DD>_<url_slug>.md
+
+`subtitles/` holds real caption tracks; `transcripts/` holds local ASR output
+for videos that have none — machine transcripts are not interchangeable with
+captions, so they never share a folder.
+
+Files written by this module carry YAML frontmatter (url, title,
+published_at, ...). Files that predate the contract may not; read functions
+tolerate both. (All legacy layouts were migrated into the canonical one via
+scripts/migrate_youtube_transcribed.py on 2026-07-30/31.)
 """
 
-import logging
-import os
-import uuid
-from datetime import UTC, datetime, timedelta
+from __future__ import annotations
+
+import re
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Literal, Optional
 
-from platformdirs import user_cache_dir
-from sqlalchemy import JSON, Column, event
-from sqlmodel import Field, Session, SQLModel, create_engine, select
+import yaml
+from pydantic import BaseModel
 
-from .models import ReadResult
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_ROOT = _REPO_ROOT / "output"
 
-logger = logging.getLogger(__name__)
-
-DEFAULT_DB_PATH_ENV = "WEB_READER_DB_PATH"
+_UNSAFE_SLUG = re.compile(r"[^A-Za-z0-9_.-]")
 
 
-def _utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
+def safe_name(text: str, limit: int = 60) -> str:
+    """Filesystem-safe fragment of a human title (same rule as `channel`)."""
+    return "".join(c if c.isalnum() or c in " -_" else "_" for c in text)[:limit].strip()
 
 
-def resolve_default_db_file() -> Path:
-    """
-    Default cache location is user-level and shared across projects:
-      macOS:   ~/Library/Caches/web-reader/store.db
-      Linux:   ~/.cache/web-reader/store.db   (XDG)
-      Windows: %LOCALAPPDATA%\\web-reader\\Cache\\store.db
-
-    Override with the WEB_READER_DB_PATH env var for project-isolated caches.
-    """
-    configured_path = os.environ.get(DEFAULT_DB_PATH_ENV)
-    if configured_path:
-        return Path(configured_path).resolve()
-    return (Path(user_cache_dir("web-reader")) / "store.db").resolve()
+def guid_slug(guid: str) -> str:
+    """Filesystem-safe fragment of a podcast guid (often a URL)."""
+    return _UNSAFE_SLUG.sub("_", guid)[:80]
 
 
-class ReadRecord(SQLModel, table=True):
-    """
-    Cached read result. Combines searchable columns with full JSON payload.
-    """
-
-    __tablename__ = "read_records"
-
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-
-    # --- Searchable columns ---
-    url: str = Field(index=True)
-    title: Optional[str] = Field(default=None)
-    text: str = Field(default="")
-    source_type: str = Field(default="unknown", index=True)
-    author: Optional[str] = Field(default=None)
-    published_at: Optional[datetime] = Field(default=None, index=True)
-
-    # --- Status ---
-    success: bool = Field(default=True, index=True)
-    error: Optional[str] = None
-
-    # --- Full payload as JSON ---
-    payload: Optional[dict] = Field(
-        default=None,
-        sa_column=Column(JSON),
-        description="Complete ReadResult serialized as JSON",
-    )
-
-    created_at: datetime = Field(default_factory=_utcnow)
-
-    def to_read_result(self) -> ReadResult:
-        """Reconstruct ReadResult from stored payload."""
-        if self.payload:
-            result = ReadResult.model_validate(self.payload)
-            result.cached = True
-            return result
-        # Fallback: reconstruct from columns
-        return ReadResult(
-            url=self.url,
-            text=self.text,
-            title=self.title or "",
-            source_type=self.source_type,
-            success=self.success,
-            error=self.error,
-            author=self.author,
-            published_at=self.published_at,
-            cached=True,
-        )
+def url_slug(url: str) -> str:
+    """Filesystem-safe fragment of an article URL (its last path segment)."""
+    last = url.rstrip("/").rsplit("/", 1)[-1] or "index"
+    return _UNSAFE_SLUG.sub("_", last)[:80]
 
 
-class RssFeedState(SQLModel, table=True):
-    """Tracks when an RSS feed was last fetched."""
-
-    __tablename__ = "rss_feed_state"
-
-    feed_url: str = Field(primary_key=True)
-    last_fetched_at: datetime = Field(default_factory=_utcnow, index=True)
+def _date_prefix(published_at: Optional[datetime]) -> str:
+    return published_at.date().isoformat() if published_at else "unknown"
 
 
-class RssEntryRecord(SQLModel, table=True):
-    """Stored RSS entry keyed by feed URL and stable entry id."""
+class StoredItem(BaseModel):
+    """One archived document, frontmatter merged with filename knowledge."""
 
-    __tablename__ = "rss_entries"
-
-    feed_url: str = Field(primary_key=True)
-    entry_id: str = Field(primary_key=True)
-    url: str = Field(index=True)
-    title: str = Field(default="")
-    text: str = Field(default="")
-    source_type: str = Field(default="rss", index=True)
-    author: Optional[str] = Field(default=None)
-    published_at: Optional[datetime] = Field(default=None, index=True)
-    payload: Optional[dict] = Field(
-        default=None,
-        sa_column=Column(JSON),
-        description="Complete RSS entry ReadResult serialized as JSON",
-    )
-    created_at: datetime = Field(default_factory=_utcnow)
-    updated_at: datetime = Field(default_factory=_utcnow)
-
-    def to_read_result(self) -> ReadResult:
-        if self.payload:
-            result = ReadResult.model_validate(self.payload)
-            result.cached = True
-            return result
-        return ReadResult(
-            url=self.url,
-            text=self.text,
-            title=self.title,
-            source_type="rss",
-            author=self.author,
-            published_at=self.published_at,
-            cached=True,
-        )
+    url: str
+    title: str = ""
+    published_at: Optional[datetime] = None
+    text: str = ""
+    source_type: str = "unknown"
+    path: Path
+    extra: dict = {}
 
 
-def _parse_datetime(value: str | None) -> datetime | None:
-    if not value:
+def _split_frontmatter(raw: str) -> tuple[dict, str]:
+    """Return (frontmatter, body). Files without frontmatter yield ({}, raw)."""
+    if raw.startswith("---\n"):
+        head, sep, body = raw[4:].partition("\n---\n")
+        if sep:
+            try:
+                meta = yaml.safe_load(head) or {}
+            except yaml.YAMLError:
+                return {}, raw
+            if isinstance(meta, dict):
+                return meta, body.lstrip("\n")
+    return {}, raw
+
+
+def _render_frontmatter(meta: dict) -> str:
+    clean = {k: v for k, v in meta.items() if v is not None}
+    return "---\n" + yaml.safe_dump(clean, allow_unicode=True, sort_keys=False) + "---\n\n"
+
+
+def _parse_dt(value) -> Optional[datetime]:
+    parsed = None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if parsed is None:
         return None
-    normalized = value.strip()
-    if not normalized:
-        return None
-    # Relative dates: -24h, -1d, -7d, -30m
-    import re
-    match = re.match(r"^-(\d+)([hdm])$", normalized)
-    if match:
-        amount, unit = int(match.group(1)), match.group(2)
-        delta = {"h": timedelta(hours=amount), "d": timedelta(days=amount), "m": timedelta(minutes=amount)}[unit]
-        return _utcnow() - delta
-    if normalized.endswith("Z"):
-        normalized = normalized[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if parsed.tzinfo is not None:
-        return parsed.astimezone().replace(tzinfo=None)
-    return parsed
+    # Frontmatter timestamps come from feeds that publish naive UTC.
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-class ReadStore:
-    """Manages SQLite cache for read results."""
+class Store:
+    """Read/write access to the output/ tree. Root defaults to this repo's."""
 
-    def __init__(self, db_path: str | Path | None = None):
-        db_file = Path(db_path).resolve() if db_path else resolve_default_db_file()
-        db_file.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, root: Path | str | None = None):
+        self.root = Path(root) if root else DEFAULT_ROOT
 
-        self.db_path = db_file
-        self.engine = create_engine(f"sqlite:///{db_file}", echo=False)
+    # ── YouTube ──────────────────────────────────────────────────────────────
 
-        # WAL + busy_timeout: safe concurrent writes from multiple projects
-        # sharing the user-level cache.
-        @event.listens_for(self.engine, "connect")
-        def _set_sqlite_pragma(dbapi_connection, _connection_record):
-            cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA busy_timeout=5000")
-            cursor.execute("PRAGMA synchronous=NORMAL")
-            cursor.close()
+    def youtube_dir(self, channel: str) -> Path:
+        return self.root / "youtube" / channel
 
-        SQLModel.metadata.create_all(self.engine)
+    def _youtube_paths(self, video_id: str) -> Iterator[Path]:
+        yt = self.root / "youtube"
+        if not yt.is_dir():
+            return
+        yield from yt.glob(f"*/subtitles/*_{video_id}_*.md")
+        yield from yt.glob(f"*/transcripts/*_{video_id}_*.md")
 
-    def save(self, result: ReadResult) -> str:
-        """Save a ReadResult to the store. Returns record ID."""
-        record = ReadRecord(
-            url=result.url,
-            title=result.title,
-            text=result.text,
-            source_type=result.source_type,
-            author=result.author,
-            published_at=result.published_at,
-            success=result.success,
-            error=result.error,
-            payload=result.model_dump(mode="json"),
-        )
-        with Session(self.engine) as session:
-            session.add(record)
-            session.commit()
-            session.refresh(record)
-            logger.debug(f"Saved: {record.id} -> {record.url}")
-            return record.id
+    def has_youtube(self, video_id: str) -> bool:
+        return next(self._youtube_paths(video_id), None) is not None
 
-    def rss_feed_is_fresh(self, feed_url: str, ttl_seconds: int) -> bool:
-        """Return True when the RSS feed fetch is still within TTL."""
-        with Session(self.engine) as session:
-            state = session.get(RssFeedState, feed_url)
-            if state is None:
-                return False
-            cutoff = _utcnow() - timedelta(seconds=ttl_seconds)
-            return state.last_fetched_at >= cutoff
+    def find_youtube(self, video_id: str) -> Optional[StoredItem]:
+        path = next(self._youtube_paths(video_id), None)
+        if path is None:
+            return None
+        return self._load(path, source_type="youtube", url=_youtube_url(video_id))
 
-    def touch_rss_feed(self, feed_url: str) -> None:
-        """Record that an RSS feed was fetched now."""
-        now = _utcnow()
-        with Session(self.engine) as session:
-            state = session.get(RssFeedState, feed_url)
-            if state is None:
-                state = RssFeedState(feed_url=feed_url, last_fetched_at=now)
-            else:
-                state.last_fetched_at = now
-            session.add(state)
-            session.commit()
-
-    def upsert_rss_entries(self, feed_url: str, results: list[ReadResult]) -> None:
-        """Insert or update RSS entries for a feed."""
-        now = _utcnow()
-        with Session(self.engine) as session:
-            for result in results:
-                if not result.success or not isinstance(result.raw, dict):
-                    continue
-                entry_id = result.raw.get("entry_id")
-                if not entry_id:
-                    continue
-                record = session.get(RssEntryRecord, (feed_url, entry_id))
-                if record is None:
-                    record = RssEntryRecord(
-                        feed_url=feed_url,
-                        entry_id=entry_id,
-                        created_at=now,
-                    )
-                record.url = result.url
-                record.title = result.title
-                record.text = result.text
-                record.source_type = result.source_type
-                record.author = result.author
-                record.published_at = result.published_at
-                record.payload = result.model_dump(mode="json")
-                record.updated_at = now
-                session.add(record)
-            session.commit()
-
-    def list_rss_entries(
+    def save_youtube(
         self,
-        feed_url: str,
-        *,
-        published_after: str | None = None,
-        limit: int | None = None,
-    ) -> list[ReadResult]:
-        """List stored RSS entries for a feed."""
-        with Session(self.engine) as session:
-            stmt = select(RssEntryRecord).where(RssEntryRecord.feed_url == feed_url)
-            if published_after:
-                cutoff = _parse_datetime(published_after)
-                if cutoff is None:
-                    raise ValueError(
-                        f"Invalid published_after value: {published_after}. "
-                        "Use YYYY-MM-DD or ISO datetime."
-                    )
-                stmt = stmt.where(
-                    RssEntryRecord.published_at.is_not(None),
-                    RssEntryRecord.published_at >= cutoff,
-                )
-            stmt = stmt.order_by(
-                RssEntryRecord.published_at.desc(),
-                RssEntryRecord.updated_at.desc(),
-            )
-            if limit is not None:
-                if limit < 0:
-                    raise ValueError(f"Invalid limit value: {limit}. Must be >= 0.")
-                stmt = stmt.limit(limit)
-            return [record.to_read_result() for record in session.exec(stmt).all()]
+        channel: str,
+        kind: Literal["subtitles", "transcripts"],
+        video_id: str,
+        title: str,
+        published_at: Optional[datetime],
+        text: str,
+        language: Optional[str] = None,
+        method: Optional[str] = None,
+        extra: Optional[dict] = None,
+    ) -> Path:
+        directory = self.youtube_dir(channel) / kind
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{_date_prefix(published_at)}_{video_id}_{safe_name(title)}.md"
+        meta = {
+            "url": _youtube_url(video_id),
+            "title": title,
+            "published_at": published_at.isoformat() if published_at else None,
+            "source_type": "youtube",
+            "video_id": video_id,
+            "language": language,
+            "method": method,
+            **(extra or {}),
+        }
+        path.write_text(_render_frontmatter(meta) + text, encoding="utf-8")
+        return path
 
-    def get_cached(
+    def list_youtube(self, channel: str, since_date: str | None = None) -> list[StoredItem]:
+        items = []
+        for kind in ("subtitles", "transcripts"):
+            for path in _md_files(self.youtube_dir(channel) / kind, since_date):
+                vid = _video_id_from_name(path.name)
+                items.append(self._load(path, source_type="youtube", url=_youtube_url(vid) if vid else ""))
+        items.sort(key=lambda i: i.published_at or datetime.min.replace(tzinfo=timezone.utc))
+        return items
+
+    # ── Podcast ──────────────────────────────────────────────────────────────
+
+    def podcast_dir(self, source_id: str) -> Path:
+        return self.root / "podcast" / source_id
+
+    def podcast_audio_dir(self, source_id: str) -> Path:
+        return self.podcast_dir(source_id) / "audio"
+
+    def _podcast_paths(self, guid: str) -> Iterator[Path]:
+        pod = self.root / "podcast"
+        if not pod.is_dir():
+            return
+        yield from pod.glob(f"*/*_{guid_slug(guid)}.md")
+
+    def has_podcast(self, guid: str) -> bool:
+        return next(self._podcast_paths(guid), None) is not None
+
+    def save_podcast(
         self,
+        source_id: str,
+        guid: str,
+        title: str,
+        published_at: Optional[datetime],
+        text: str,
+        webpage_url: Optional[str] = None,
+        author: Optional[str] = None,
+        method: Optional[str] = None,
+    ) -> Path:
+        directory = self.podcast_dir(source_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{_date_prefix(published_at)}_{guid_slug(guid)}.md"
+        meta = {
+            "url": f"podcast://{guid}",
+            "title": title,
+            "published_at": published_at.isoformat() if published_at else None,
+            "source_type": "rss_podcast",
+            "guid": guid,
+            "webpage_url": webpage_url,
+            "author": author,
+            "method": method,
+        }
+        path.write_text(_render_frontmatter(meta) + text, encoding="utf-8")
+        return path
+
+    def list_podcast(self, source_id: str, since_date: str | None = None) -> list[StoredItem]:
+        items = [
+            self._load(path, source_type="rss_podcast")
+            for path in _md_files(self.podcast_dir(source_id), since_date)
+        ]
+        items.sort(key=lambda i: i.published_at or datetime.min.replace(tzinfo=timezone.utc))
+        return items
+
+    # ── Articles (substack / rss) ────────────────────────────────────────────
+
+    def article_dir(self, source_id: str) -> Path:
+        return self.root / "substack" / source_id
+
+    def has_article(self, source_id: str, url: str) -> bool:
+        directory = self.article_dir(source_id)
+        return directory.is_dir() and next(directory.glob(f"*_{url_slug(url)}.md"), None) is not None
+
+    def save_article(
+        self,
+        source_id: str,
         url: str,
-        ttl_seconds: Optional[int] = None,
-        source_type: Optional[str] = None,
-    ) -> Optional[ReadResult]:
-        """
-        Retrieve cached result for a URL if it exists and is within TTL.
-        Returns None on cache miss.
-        """
-        with Session(self.engine) as session:
-            stmt = select(ReadRecord).where(
-                ReadRecord.url == url,
-                ReadRecord.success == True,  # noqa: E712
-            )
-            if source_type:
-                stmt = stmt.where(ReadRecord.source_type == source_type)
-            if ttl_seconds is not None:
-                cutoff = _utcnow() - timedelta(seconds=ttl_seconds)
-                stmt = stmt.where(ReadRecord.created_at >= cutoff)
+        title: str,
+        published_at: Optional[datetime],
+        text: str,
+        author: Optional[str] = None,
+    ) -> Path:
+        directory = self.article_dir(source_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{_date_prefix(published_at)}_{url_slug(url)}.md"
+        meta = {
+            "url": url,
+            "title": title,
+            "published_at": published_at.isoformat() if published_at else None,
+            "source_type": "substack",
+            "author": author,
+        }
+        path.write_text(_render_frontmatter(meta) + text, encoding="utf-8")
+        return path
 
-            stmt = stmt.order_by(ReadRecord.created_at.desc())
-            record = session.exec(stmt).first()
+    def list_articles(self, source_id: str, since_date: str | None = None) -> list[StoredItem]:
+        items = [
+            self._load(path, source_type="substack")
+            for path in _md_files(self.article_dir(source_id), since_date)
+        ]
+        items.sort(key=lambda i: i.published_at or datetime.min.replace(tzinfo=timezone.utc))
+        return items
 
-            if record:
-                logger.debug(f"Cache hit: {url}")
-                return record.to_read_result()
-            return None
+    # ── Shared ───────────────────────────────────────────────────────────────
 
-    def get_rss_entry(self, url: str) -> Optional[ReadResult]:
-        """
-        Look up a cached RSS entry by its post URL (across all feeds).
-        No TTL — published article bodies are immutable.
-        """
-        with Session(self.engine) as session:
-            stmt = (
-                select(RssEntryRecord)
-                .where(RssEntryRecord.url == url)
-                .order_by(RssEntryRecord.updated_at.desc())
-            )
-            record = session.exec(stmt).first()
-            if record:
-                logger.debug(f"RSS entry cache hit: {url}")
-                return record.to_read_result()
-            return None
+    def _load(self, path: Path, source_type: str, url: str = "") -> StoredItem:
+        raw = path.read_text(encoding="utf-8", errors="ignore")
+        meta, body = _split_frontmatter(raw)
+        known = {"url", "title", "published_at", "source_type"}
+        return StoredItem(
+            url=meta.get("url") or url,
+            title=meta.get("title") or "",
+            published_at=_parse_dt(meta.get("published_at")) or _parse_dt(_file_date(path.name)),
+            text=body.strip(),
+            source_type=meta.get("source_type") or source_type,
+            path=path,
+            extra={k: v for k, v in meta.items() if k not in known},
+        )
 
-    def search_by_url(self, url: str) -> list[ReadRecord]:
-        """Find all records matching a URL."""
-        with Session(self.engine) as session:
-            stmt = select(ReadRecord).where(ReadRecord.url == url)
-            return list(session.exec(stmt).all())
 
-    def list_records(
-        self,
-        source_type: Optional[str] = None,
-        success: Optional[bool] = None,
-        limit: int = 50,
-        offset: int = 0,
-        hours_ago: Optional[int] = None,
-    ) -> list[ReadRecord]:
-        """List records with filtering and pagination."""
-        with Session(self.engine) as session:
-            stmt = select(ReadRecord)
-            if source_type:
-                stmt = stmt.where(ReadRecord.source_type == source_type)
-            if success is not None:
-                stmt = stmt.where(ReadRecord.success == success)
-            if hours_ago:
-                cutoff = _utcnow() - timedelta(hours=hours_ago)
-                stmt = stmt.where(ReadRecord.created_at >= cutoff)
+def _md_files(directory: Path, since_date: str | None = None) -> list[Path]:
+    """Markdown files in `directory`, optionally date-filtered by filename prefix.
 
-            stmt = stmt.order_by(ReadRecord.created_at.desc())
-            stmt = stmt.limit(limit).offset(offset)
-            return list(session.exec(stmt).all())
+    Files without a parseable date prefix are always included — losing them
+    silently would be worse than over-including.
+    """
+    if not directory.is_dir():
+        return []
+    out = []
+    for path in sorted(directory.glob("*.md")):
+        day = _file_date(path.name)
+        if since_date and day and day < since_date:
+            continue
+        out.append(path)
+    return out
 
-    def search_text(
-        self,
-        query: str,
-        source_type: Optional[str] = None,
-        limit: int = 50,
-    ) -> list[ReadRecord]:
-        """Simple text search using LIKE."""
-        with Session(self.engine) as session:
-            stmt = select(ReadRecord)
-            if source_type:
-                stmt = stmt.where(ReadRecord.source_type == source_type)
-            if query:
-                stmt = stmt.where(ReadRecord.text.like(f"%{query}%"))
-            stmt = stmt.order_by(ReadRecord.created_at.desc())
-            stmt = stmt.limit(limit)
-            return list(session.exec(stmt).all())
+
+_DATE_PREFIX = re.compile(r"^(\d{4}-\d{2}-\d{2})_")
+_VIDEO_ID_IN_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}_([A-Za-z0-9_-]{11})_")
+
+
+def _file_date(name: str) -> Optional[str]:
+    m = _DATE_PREFIX.match(name)
+    return m.group(1) if m else None
+
+
+def _video_id_from_name(name: str) -> Optional[str]:
+    m = _VIDEO_ID_IN_NAME.match(name)
+    return m.group(1) if m else None
+
+
+def _youtube_url(video_id: str) -> str:
+    return f"https://www.youtube.com/watch?v={video_id}"

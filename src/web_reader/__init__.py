@@ -11,8 +11,8 @@ Usage:
         print(result.text)
 
     # With caching (default: user-level shared cache, e.g. ~/Library/Caches/web-reader/)
-    from web_reader import read_url, ReadStore
-    store = ReadStore()
+    from web_reader import read_url, ReadCache
+    store = ReadCache()
     result = await read_url("https://example.com", store=store)
 
     # CLI
@@ -28,7 +28,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from .models import ReadResult, EmailRequest, RssEntry, SourceType
-from .store import ReadStore, ReadRecord
+from .cache import ReadCache, ReadRecord
 from ._detect import detect_source_type
 from .config import FeedConfig, SourceConfig, CacheConfig, load_config
 
@@ -59,7 +59,7 @@ __all__ = [
     "read_urls",
     # Models
     "ReadResult",
-    "ReadStore",
+    "ReadCache",
     "ReadRecord",
     "EmailRequest",
     "RssEntry",
@@ -155,7 +155,7 @@ def WebReaderKnowledge(*args, **kwargs):
 
 async def read_url(
     url: str,
-    store: Optional[ReadStore] = None,
+    store: Optional[ReadCache] = None,
     cache_ttl: Optional[int] = 3600,
     **kwargs,
 ) -> ReadResult:
@@ -164,7 +164,7 @@ async def read_url(
 
     Args:
         url: The URL to read.
-        store: Optional ReadStore for caching. Pass None to skip caching.
+        store: Optional ReadCache for caching. Pass None to skip caching.
         cache_ttl: Cache TTL in seconds. Default 1 hour. None = no TTL check.
         **kwargs: Passed through to the underlying reader.
 
@@ -242,7 +242,7 @@ async def read_url(
 
 async def read_urls(
     urls: list[str],
-    store: Optional[ReadStore] = None,
+    store: Optional[ReadCache] = None,
     cache_ttl: Optional[int] = 3600,
     concurrency: int = 5,
     **kwargs,
@@ -252,7 +252,7 @@ async def read_urls(
 
     Args:
         urls: List of URLs to read.
-        store: Optional ReadStore for caching.
+        store: Optional ReadCache for caching.
         cache_ttl: Cache TTL in seconds.
         concurrency: Max concurrent requests. Default 5.
         **kwargs: Passed through to the underlying readers.

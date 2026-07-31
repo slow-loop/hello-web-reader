@@ -1,9 +1,9 @@
-"""`web-reader fetch` — incremental watchlist fetch into the output/ archive.
+"""`web-reader fetch` — incremental watchlist fetch into the output/ store.
 
 Reads a watchlist (feeds.yaml-format config), fetches whatever is new since
-the window start, and archives it through `web_reader.archive`. This is the
+the window start, and archives it through `web_reader.store`. This is the
 recurring acquisition step of the pipeline: downstream consumers never fetch
-from the network themselves — they read the archive this command maintains.
+from the network themselves — they read the store this command maintains.
 
 Per reader:
     rss           → article full text  → output/substack/<id>/
@@ -24,7 +24,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .archive import Archive, safe_name
+from .store import Store, safe_name
 from .config import SourceConfig, load_config
 
 # Measured: SenseVoice runs at ~7.4x realtime. Used for --dry-run estimates.
@@ -77,7 +77,7 @@ class SourceResult:
         self.error: str | None = None
 
 
-async def _fetch_rss(source: SourceConfig, archive: Archive, since: datetime, dry_run: bool) -> SourceResult:
+async def _fetch_rss(source: SourceConfig, store: Store, since: datetime, dry_run: bool) -> SourceResult:
     from .readers.rss import read_rss_entries
 
     res = SourceResult(_source_id(source), source.reader)
@@ -87,13 +87,13 @@ async def _fetch_rss(source: SourceConfig, archive: Archive, since: datetime, dr
     for r in results:
         if not r.ok:
             continue
-        if archive.has_article(res.source_id, r.url):
+        if store.has_article(res.source_id, r.url):
             res.reused += 1
             continue
         if dry_run:
             print(f"    would fetch: {(r.title or r.url)[:70]}")
         else:
-            archive.save_article(
+            store.save_article(
                 res.source_id, r.url, r.title, r.published_at, r.text, author=r.author,
             )
         res.new += 1
@@ -101,7 +101,7 @@ async def _fetch_rss(source: SourceConfig, archive: Archive, since: datetime, dr
 
 
 async def _fetch_podcast(
-    source: SourceConfig, archive: Archive, since: datetime, dry_run: bool, limit_override: int | None,
+    source: SourceConfig, store: Store, since: datetime, dry_run: bool, limit_override: int | None,
 ) -> SourceResult:
     from .readers.rss_podcast import list_episodes, read_episode
 
@@ -112,7 +112,7 @@ async def _fetch_podcast(
     for ep in await list_episodes(source.url):
         if not (ep.published_at and ep.published_at >= since):
             continue
-        if archive.has_podcast(ep.guid):
+        if store.has_podcast(ep.guid):
             res.reused += 1
             continue
         todo.append(ep)
@@ -138,11 +138,11 @@ async def _fetch_podcast(
             print(f"    would transcribe: {date}  {ep.title[:60]}")
             res.new += 1
             continue
-        r = await read_episode(ep, audio_dir=archive.podcast_audio_dir(res.source_id))
+        r = await read_episode(ep, audio_dir=store.podcast_audio_dir(res.source_id))
         if not r.ok:
             print(f"    ✗ {ep.title[:50]}: {r.error}")
             continue
-        path = archive.save_podcast(
+        path = store.save_podcast(
             res.source_id, ep.guid, ep.title, ep.published_at, r.text,
             webpage_url=ep.webpage_url, author=ep.author, method="sensevoice",
         )
@@ -152,7 +152,7 @@ async def _fetch_podcast(
 
 
 async def _fetch_youtube(
-    source: SourceConfig, archive: Archive, since: datetime, dry_run: bool, limit_override: int | None,
+    source: SourceConfig, store: Store, since: datetime, dry_run: bool, limit_override: int | None,
 ) -> SourceResult:
     from .readers.youtube import fetch_video_details, list_channel_videos, read_youtube
 
@@ -160,14 +160,14 @@ async def _fetch_youtube(
     channel_id = source.params.get("channel_id") or source.params.get("handle")
     if not channel_id:
         raise ValueError("youtube source missing params.channel_id")
-    # Archive folder: explicit handle param, falling back to the source id.
+    # Store folder: explicit handle param, falling back to the source id.
     channel_dir = (source.params.get("handle") or res.source_id).lstrip("@")
     limit = limit_override if limit_override is not None else int(source.params.get("limit", DEFAULT_YOUTUBE_LIMIT))
 
     videos = await list_channel_videos(channel_id, since=since.date().isoformat())
     fresh = []
     for v in videos:
-        if archive.has_youtube(v["id"]):
+        if store.has_youtube(v["id"]):
             res.reused += 1
         else:
             fresh.append(v)
@@ -220,7 +220,7 @@ async def _fetch_youtube(
         method = (r.raw or {}).get("method", "")
         kind = "subtitles" if method == "yt-dlp-subs" else "transcripts"
         published = datetime.fromisoformat(v["published_at"].replace("Z", "+00:00")) if v.get("published_at") else None
-        path = archive.save_youtube(
+        path = store.save_youtube(
             channel_dir, kind, v["id"], v["title"], published, r.text,
             language=r.language, method=method,
         )
@@ -243,9 +243,9 @@ async def fetch_watchlist(
     only_source: str | None = None,
     limit_override: int | None = None,
     dry_run: bool = False,
-    archive: Archive | None = None,
+    store: Store | None = None,
 ) -> list[SourceResult]:
-    archive = archive or Archive()
+    store = store or Store()
     since = resolve_since(since_str)
     config = load_config(config_path)
 
@@ -265,9 +265,9 @@ async def fetch_watchlist(
         print(f"  {sid} ({source.reader})")
         try:
             if source.reader == "rss":
-                res = await fetcher(source, archive, since, dry_run)
+                res = await fetcher(source, store, since, dry_run)
             else:
-                res = await fetcher(source, archive, since, dry_run, limit_override)
+                res = await fetcher(source, store, since, dry_run, limit_override)
         except Exception as e:
             res = SourceResult(sid, source.reader)
             res.error = f"{type(e).__name__}: {e}"
@@ -276,7 +276,7 @@ async def fetch_watchlist(
 
     n_new = sum(r.new for r in results)
     n_errors = sum(1 for r in results if r.error)
-    verb = "would archive" if dry_run else "archived"
+    verb = "would store" if dry_run else "archived"
     print(
         f"\n{len(results)} source(s), {verb} {n_new} new item(s), "
         f"{n_errors} error(s), since {since.isoformat(timespec='seconds')}"
