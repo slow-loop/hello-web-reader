@@ -6,8 +6,6 @@ Stage 1: local SenseVoice ASR (FunASR). Optionally pre-split with
 to keep peak memory bounded (funasr/FunASR Issue #2116 — memory scales
 badly with single-file length; macOS jetsam can silently kill the process).
 
-Stage 1b: OpenCC s2twp converts Simplified Chinese to Traditional (Taiwan).
-
 Stage 2: OpenRouter LLM polish (default `deepseek/deepseek-v4-flash`).
 
 Output: one `<stem>.md` per audio file with YAML frontmatter, the polished
@@ -36,7 +34,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-import opencc  # noqa: E402
 import split_audio_on_silence as splitter  # noqa: E402
 from web_reader.transcribe import asr, refine  # noqa: E402
 
@@ -66,9 +63,6 @@ _CHUNK_OVERLAP_SEC = 1.0
 _CHUNK_NOISE = "-32dB"
 _CHUNK_SILENCE_DURATION = 0.35
 _CHUNK_BITRATE = "48k"
-
-
-_s2twp = opencc.OpenCC("s2twp")
 
 
 def _frontmatter(
@@ -212,9 +206,6 @@ def transcribe_file(
         raw = asr.transcribe(audio_path)
         chunk_count = None
     asr_s = time.time() - t0
-
-    # Stage 1b: normalize Simplified → Traditional Chinese (Taiwan).
-    raw = _s2twp.convert(raw)
 
     t0 = time.time()
     polished = refine.refine(raw, vocabulary_terms=vocabulary)

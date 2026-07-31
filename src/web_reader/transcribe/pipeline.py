@@ -6,21 +6,20 @@ import logging
 import os
 from pathlib import Path
 
-import opencc
-
 from . import asr, refine
 
 logger = logging.getLogger(__name__)
-
-_s2twp = opencc.OpenCC("s2twp")
 
 
 def transcribe_audio(audio_path: Path | str, vocabulary_terms: list[str] | None = None) -> str:
     """Run SenseVoice ASR followed by OpenRouter LLM polishing.
 
     Stage 1 runs locally; stage 2 calls OpenRouter (requires OPENROUTER_API_KEY).
-    Between stages, OpenCC s2twp converts Simplified Chinese ASR output to
-    Traditional Chinese (Taiwan) so the LLM preserves the correct script.
+    No script normalization: SenseVoice emits Simplified Chinese, and converting
+    here (we used OpenCC s2twp) rewrote vocabulary the speaker actually chose
+    (软件 → 軟體, 项目 → 專案) irreversibly, before the LLM pass could tell the
+    substitution apart from a real ASR error. Convert at the point of
+    publication instead, where the target audience is known.
 
     Args:
         audio_path: Path to a local audio file.
@@ -32,9 +31,6 @@ def transcribe_audio(audio_path: Path | str, vocabulary_terms: list[str] | None 
     if not raw.strip():
         logger.warning("ASR returned empty transcript for %s", audio_path)
         return raw
-
-    logger.info("Stage 1b: OpenCC s2twp conversion (%d chars)", len(raw))
-    raw = _s2twp.convert(raw)
 
     if os.environ.get("TRANSCRIBE_SKIP_REFINE", "").strip().lower() in ("1", "true", "yes"):
         logger.info("Stage 2 skipped (TRANSCRIBE_SKIP_REFINE set); returning local ASR output")

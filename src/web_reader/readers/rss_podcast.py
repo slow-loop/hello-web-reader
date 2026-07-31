@@ -4,10 +4,10 @@ transcribe it with the local ASR pipeline.
 
 Unlike the `rss` reader (which only reads the text body and ignores the audio
 `<enclosure>`), this reader is audio-first: it parses the feed for enclosures,
-downloads the mp3, and runs raw SenseVoice ASR. It deliberately skips the
-OpenCC + LLM refinement stages of `transcribe.transcribe_audio` — this reader's
-job is to fetch the raw transcript; script normalization and polishing are left
-to whatever consumes the text downstream.
+downloads the mp3, and runs raw SenseVoice ASR. It deliberately skips the LLM
+refinement stage of `transcribe.transcribe_audio` — this reader's job is to
+fetch the raw transcript; polishing is left to whatever consumes the text
+downstream.
 
 Dedup identity is the feed's `<guid>` (feedparser `entry.id`), wrapped as
 `podcast://<guid>`. The guid is published by the podcast host and is stable,
@@ -205,7 +205,7 @@ async def read_episode(
 ) -> ReadResult:
     """Download an episode's audio and transcribe it (raw ASR only).
 
-    No OpenCC, no LLM refinement — `asr.transcribe` output verbatim. Returns a
+    No LLM refinement — `asr.transcribe` output verbatim. Returns a
     failed ReadResult on download error so a single bad episode doesn't abort a
     batch.
 
