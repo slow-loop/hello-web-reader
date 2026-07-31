@@ -35,13 +35,6 @@ class TestYouTube:
         assert p1.parent.name == "subtitles"
         assert p2.parent.name == "transcripts"
 
-    def test_legacy_transcribed_layout_found(self, archive):
-        legacy = archive.root / "youtube" / "oldch" / "transcribed"
-        legacy.mkdir(parents=True)
-        (legacy / "legacyvid01.md").write_text("legacy text")
-        assert archive.has_youtube("legacyvid01")
-        assert archive.find_youtube("legacyvid01").text == "legacy text"
-
     def test_file_without_frontmatter_still_loads(self, archive):
         subs = archive.root / "youtube" / "ch" / "subtitles"
         subs.mkdir(parents=True)

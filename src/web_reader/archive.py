@@ -20,8 +20,8 @@ captions, so they never share a folder.
 
 Files written by this module carry YAML frontmatter (url, title,
 published_at, ...). Files that predate the contract may not; read functions
-tolerate both, plus the one legacy layout still on disk
-(`transcribed/<video_id>.md`).
+tolerate both. (All legacy layouts were migrated into the canonical one via
+scripts/migrate_youtube_transcribed.py on 2026-07-30/31.)
 """
 
 from __future__ import annotations
@@ -123,8 +123,6 @@ class Archive:
             return
         yield from yt.glob(f"*/subtitles/*_{video_id}_*.md")
         yield from yt.glob(f"*/transcripts/*_{video_id}_*.md")
-        # Legacy layout, predates this module; migrated dirs may still hold it.
-        yield from yt.glob(f"*/transcribed/{video_id}.md")
 
     def has_youtube(self, video_id: str) -> bool:
         return next(self._youtube_paths(video_id), None) is not None
