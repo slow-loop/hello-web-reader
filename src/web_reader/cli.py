@@ -19,6 +19,7 @@ from urllib.parse import parse_qs
 
 import typer
 
+from .archive import Archive, safe_name as _safe_name
 from .formatting import flatten_results_map, format_results
 from .store import ReadStore
 
@@ -140,10 +141,6 @@ async def _run_url(
             logging.getLogger(__name__).error(f"Failed to save MD: {e}")
 
     _print_results([result], output_format)
-
-
-def _safe_name(text: str, limit: int = 60) -> str:
-    return "".join(c if c.isalnum() or c in " -_" else "_" for c in text)[:limit].strip()
 
 
 def _parse_iso_duration(iso: str) -> str:
@@ -275,24 +272,19 @@ async def _run_channel(
                 status = "ok" if used else "FAILED"
                 print(f"  [{i}/{len(rows)}] {status} {r['video_id']}")
 
-    if subtitles:
-        subs_dir = out_dir / "subtitles"
-        subs_dir.mkdir(exist_ok=True)
-        # The API already told us which videos have captions — skip the rest
-        # without paying for a yt-dlp round trip.
-        targets = [r for r in rows if r["caption"] == "true"]
-        print(
-            f"\nSubtitles: {len(targets)}/{len(rows)} videos have captions "
-            f"(est. ~{max(1, round(len(targets) * 3 / 60))} min) -> {subs_dir}"
-        )
+    # Transcript storage goes through the archive contract (frontmatter,
+    # canonical paths, global dedupe by video id) — the same layout `fetch`
+    # writes and downstream consumers read. --out only moves the snapshot
+    # files above, never the transcripts.
+    archive = Archive()
+
+    async def _save_transcripts(targets: list[dict], use_audio: bool) -> None:
         for i, r in enumerate(targets, 1):
-            # Key the skip on video_id so a retitled video is not fetched twice.
-            if next(subs_dir.glob(f"*_{r['video_id']}_*.md"), None):
+            if archive.has_youtube(r["video_id"]):
                 print(f"  [{i}/{len(targets)}] exists, skipping {r['video_id']}")
                 continue
-            date = (r["published_at"] or "unknown")[:10]
-            out_file = subs_dir / f"{date}_{r['video_id']}_{_safe_name(r['title'])}.md"
-            result = await read_youtube(r["url"], languages=languages, use_audio_fallback=False)
+            started = time.monotonic()
+            result = await read_youtube(r["url"], languages=languages, use_audio_fallback=use_audio)
             await asyncio.sleep(YTDLP_REQUEST_DELAY_SECONDS)
             if not result.success:
                 print(f"  [{i}/{len(targets)}] FAILED {r['video_id']}: {result.error}")
@@ -300,13 +292,31 @@ async def _run_channel(
                     print(f"  Stopping: YouTube rate-limited this session. {len(targets) - i} videos not attempted — rerun later.")
                     break
                 continue
-            out_file.write_text(result.text, encoding="utf-8")
-            lang = result.language or "?"
-            print(f"  [{i}/{len(targets)}] ok ({lang}, {len(result.text)} chars) -> {out_file.name}")
+            published = None
+            if r["published_at"]:
+                published = datetime.fromisoformat(r["published_at"].replace("Z", "+00:00"))
+            method = (result.raw or {}).get("method", "")
+            # A caption-less video may still resolve via captions after all
+            # (auto-generated tracks) — file it by what actually happened.
+            actual_kind = "subtitles" if method == "yt-dlp-subs" else "transcripts"
+            path = archive.save_youtube(
+                out_dir.name, actual_kind, r["video_id"], r["title"], published,
+                result.text, language=result.language, method=method,
+            )
+            took = f"{r['duration']} audio in {time.monotonic() - started:.0f}s" if use_audio else (result.language or "?")
+            print(f"  [{i}/{len(targets)}] ok ({took}, {len(result.text)} chars) -> {actual_kind}/{path.name}")
+
+    if subtitles:
+        # The API already told us which videos have captions — skip the rest
+        # without paying for a yt-dlp round trip.
+        targets = [r for r in rows if r["caption"] == "true"]
+        print(
+            f"\nSubtitles: {len(targets)}/{len(rows)} videos have captions "
+            f"(est. ~{max(1, round(len(targets) * 3 / 60))} min) -> {archive.youtube_dir(out_dir.name) / 'subtitles'}"
+        )
+        await _save_transcripts(targets, use_audio=False)
 
     if transcribe:
-        tx_dir = out_dir / "transcripts"
-        tx_dir.mkdir(exist_ok=True)
         # Complement of --subtitles: only videos with no caption track, which is
         # the only case worth paying for audio ASR. Kept in its own folder
         # because machine transcripts are not interchangeable with real captions.
@@ -314,28 +324,9 @@ async def _run_channel(
         audio_min = sum(_duration_seconds(r["duration"]) for r in targets) / 60
         print(
             f"\nTranscripts: {len(targets)}/{len(rows)} videos have no captions, "
-            f"{audio_min / 60:.1f}h of audio -> {tx_dir}"
+            f"{audio_min / 60:.1f}h of audio -> {archive.youtube_dir(out_dir.name) / 'transcripts'}"
         )
-        for i, r in enumerate(targets, 1):
-            if next(tx_dir.glob(f"*_{r['video_id']}_*.md"), None):
-                print(f"  [{i}/{len(targets)}] exists, skipping {r['video_id']}")
-                continue
-            date = (r["published_at"] or "unknown")[:10]
-            out_file = tx_dir / f"{date}_{r['video_id']}_{_safe_name(r['title'])}.md"
-            started = time.monotonic()
-            result = await read_youtube(r["url"], languages=languages, use_audio_fallback=True)
-            await asyncio.sleep(YTDLP_REQUEST_DELAY_SECONDS)
-            if not result.success:
-                print(f"  [{i}/{len(targets)}] FAILED {r['video_id']}: {result.error}")
-                if _is_ytdlp_rate_limited(result.error):
-                    print(f"  Stopping: YouTube rate-limited this session. {len(targets) - i} videos not attempted — rerun later.")
-                    break
-                continue
-            out_file.write_text(result.text, encoding="utf-8")
-            print(
-                f"  [{i}/{len(targets)}] ok ({r['duration']} audio in "
-                f"{time.monotonic() - started:.0f}s, {len(result.text)} chars) -> {out_file.name}"
-            )
+        await _save_transcripts(targets, use_audio=True)
 
     print("\nDone.")
 
@@ -390,7 +381,7 @@ def channel(
     subtitles: bool = typer.Option(False, "--subtitles", help="Also fetch subtitle transcripts where available."),
     transcribe: bool = typer.Option(False, "--transcribe", help="Audio-transcribe the videos that have NO captions (slow, local ASR)."),
     lang: Optional[str] = typer.Option(None, help="Comma-separated preferred subtitle languages (e.g. 'zh-Hant,en')."),
-    out: Optional[str] = typer.Option(None, help="Output directory (default: ./output/youtube/<handle>)."),
+    out: Optional[str] = typer.Option(None, help="Directory for snapshot files (manifest/videos/thumbnails); default ./output/youtube/<handle>. Subtitle/ASR transcripts always land in the output/ archive."),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
 ):
     """
