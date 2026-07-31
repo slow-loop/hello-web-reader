@@ -89,6 +89,30 @@ unless `--out` is given. Re-running skips thumbnails/subtitles already on disk.
 
 > `gnews` returns title + source URL only. To get full text, pipe the URL back through `web-reader`.
 
+### Watchlist fetch (incremental archive)
+
+The recurring acquisition step: read a watchlist (feeds.yaml format), fetch
+whatever is new in the window, and archive it under `output/` as markdown with
+frontmatter (layout contract in `web_reader.archive`). Already-archived items
+are never re-fetched, so overlapping windows are free.
+
+- `rss` → article full text → `output/substack/<id>/`
+- `rss_podcast` → audio download + local ASR → `output/podcast/<id>/` (audio kept in `audio/`)
+- `youtube_channel` → captions, ASR fallback for caption-less videos →
+  `output/youtube/<handle>/{subtitles,transcripts}/`
+
+```bash
+uv run web-reader fetch path/to/watchlist.yaml   # last 24h
+uv run web-reader fetch path/to/watchlist.yaml --since -7d --dry-run
+uv run web-reader fetch path/to/watchlist.yaml --source some-id --limit 10
+```
+
+The watchlist path is explicit so any repo can point web-reader at its own
+list; output always lands in this repo's `output/` archive.
+
+`--limit` caps *new* expensive fetches (ASR / yt-dlp) per source; `--dry-run`
+prices the batch (worst-case ASR hours) without downloading anything.
+
 ### YAML feed config (batch fetch)
 
 ```bash

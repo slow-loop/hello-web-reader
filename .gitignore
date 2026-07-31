@@ -224,5 +224,9 @@ data/briefings
 feeds.yaml
 # Generated output
 output/
-www.youtube.com_cookies.txt
+tmp/
+www.*.com_cookies.txt
 .DS_Store
+
+# Personal watchlists (same policy as feeds.yaml)
+watchlist.yaml

@@ -21,6 +21,7 @@ class SourceConfig(BaseModel):
 
     name: str
     reader: str  # web, rss, reddit, youtube, email, json, substack
+    id: Optional[str] = None  # stable source id; names the archive folder
     url: Optional[str] = None
     params: dict[str, Any] = Field(default_factory=dict)
     cache: CacheConfig = Field(default_factory=CacheConfig)

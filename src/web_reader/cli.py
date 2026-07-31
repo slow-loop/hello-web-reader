@@ -420,6 +420,31 @@ def channel(
     )
 
 
+@app.command()
+def fetch(
+    watchlist: str = typer.Argument(..., help="Path to the watchlist config (feeds.yaml format)."),
+    since: str = typer.Option("-24h", help="Window start: -24h / -7d / YYYY-MM-DD."),
+    source: Optional[str] = typer.Option(None, help="Only fetch this source id."),
+    limit: Optional[int] = typer.Option(None, help="Override per-source cap on new expensive fetches (ASR/yt-dlp)."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="List what would be fetched; write nothing."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
+):
+    """
+    Incrementally fetch watchlist sources into the output/ archive.
+
+    The recurring acquisition step: rss articles into output/substack/,
+    podcast ASR transcripts into output/podcast/, YouTube captions (with ASR
+    fallback for caption-less videos) into output/youtube/. Already-archived
+    items are never re-fetched, so overlapping windows are free.
+    """
+    from .fetch import fetch_watchlist
+
+    _setup_logging(verbose)
+    results = asyncio.run(fetch_watchlist(watchlist, since, source, limit, dry_run))
+    if results and all(r.error for r in results):
+        raise typer.Exit(1)
+
+
 def main():
     app()
 
