@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -86,6 +87,7 @@ async def _fetch_rss(source: SourceConfig, store: Store, since: datetime, dry_ru
     results = await read_rss_entries(source.url, published_after=since_naive)
     for r in results:
         if not r.ok:
+            print(f"    ✗ {(r.title or r.url)[:50]}: {r.error}")
             continue
         if store.has_article(res.source_id, r.url):
             res.reused += 1
@@ -174,19 +176,29 @@ async def _fetch_youtube(
 
     details = await fetch_video_details([v["id"] for v in fresh]) if fresh else {}
     todo = []
+    skipped = Counter()
     for v in fresh:
         d = details.get(v["id"], {})
         snippet, content = d.get("snippet", {}), d.get("contentDetails", {})
+        # Live *replays* are ordinary videos here: for some channels the daily
+        # livestream is the whole show. Only a stream still running (or merely
+        # scheduled) is skipped — it has no complete transcript yet, so it gets
+        # picked up by a later run instead.
         if snippet.get("liveBroadcastContent", "none") != "none":
-            continue  # upcoming / live
-        if "liveStreamingDetails" in d:
-            continue  # live stream replay
+            skipped["still live / upcoming"] += 1
+            continue
         duration = _iso_duration_seconds(content.get("duration", ""))
         if 0 < duration <= SHORTS_MAX_SECONDS:
-            continue  # shorts
+            skipped["shorts"] += 1
+            continue
         v["duration_seconds"] = duration
         v["has_captions"] = content.get("caption") == "true"
         todo.append(v)
+
+    # Never drop a video without saying so. A filter that quietly eats a whole
+    # channel's output looks exactly like a channel that published nothing.
+    if skipped:
+        print("    skipped " + ", ".join(f"{n} {reason}" for reason, n in skipped.items()))
 
     if len(todo) > limit:
         print(f"    ⚠ {len(todo)} videos to fetch, doing newest {limit} (raise --limit to widen)")
@@ -272,13 +284,20 @@ async def fetch_watchlist(
             res = SourceResult(sid, source.reader)
             res.error = f"{type(e).__name__}: {e}"
             print(f"    ✗ {res.error}")
+        # Say when a source was already up to date. Without this, "we have all
+        # of it already" and "this source published nothing" look identical —
+        # a bare header line either way.
+        if res.reused:
+            print(f"    {res.reused} already archived")
         results.append(res)
 
     n_new = sum(r.new for r in results)
+    n_reused = sum(r.reused for r in results)
     n_errors = sum(1 for r in results if r.error)
     verb = "would store" if dry_run else "archived"
     print(
         f"\n{len(results)} source(s), {verb} {n_new} new item(s), "
-        f"{n_errors} error(s), since {since.isoformat(timespec='seconds')}"
+        f"{n_reused} already archived, {n_errors} error(s), "
+        f"since {since.isoformat(timespec='seconds')}"
     )
     return results
