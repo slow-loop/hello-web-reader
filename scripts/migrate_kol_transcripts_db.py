@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-off: export kol_mvp's podcast transcript cache into the output/ archive.
+"""One-off: export kol_mvp's podcast transcript cache into the output/ store.
 
 Reads rss_podcast rows from hello-note's `.cache/transcripts.db` (a ReadCache
 SQLite file) and writes each as `output/podcast/<source_id>/<date>_<guid>.md`
@@ -49,7 +49,7 @@ def main() -> int:
     by_url = {r[0]: r for r in rows}
     print(f"{len(rows)} row(s), {len(by_url)} unique episode(s).")
 
-    archive = Store()
+    store = Store()
     n_new = n_existing = n_skipped = 0
     per_source: dict[str, int] = {}
 
@@ -76,7 +76,7 @@ def main() -> int:
                 n_skipped += 1
                 continue
 
-        if archive.has_podcast(guid):
+        if store.has_podcast(guid):
             n_existing += 1
             continue
 
@@ -86,7 +86,7 @@ def main() -> int:
 
         per_source[source_id] = per_source.get(source_id, 0) + 1
         if args.apply:
-            archive.save_podcast(
+            store.save_podcast(
                 source_id, guid, raw.get("episode_title") or title, published, text,
                 webpage_url=raw.get("webpage_url"),
                 author=raw.get("podcast_title"),

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-off: migrate legacy YouTube layouts into the archive contract.
+"""One-off: migrate legacy YouTube layouts into the store contract.
 
 Three legacy shapes exist(ed) on disk, all moved to
 `{subtitles,transcripts}/<date>_<video_id>_<title>.md` with frontmatter
@@ -50,9 +50,9 @@ _DATE_PREFIX = re.compile(r"^(\d{4}-\d{2}-\d{2})_(.*)$")
 _ASR_LANG = re.compile(r"^LANG:\s*ai-transcribed\s*$", re.MULTILINE)
 
 
-def _scan(archive: Store) -> list[dict]:
+def _scan(store: Store) -> list[dict]:
     """All legacy files with what we can learn without the API."""
-    yt = archive.root / "youtube"
+    yt = store.root / "youtube"
     legacy = [(p, "transcripts") for p in sorted(yt.glob("*/transcribed/*.md"))]
     # Root-level files: ASR output goes to transcripts/, caption fetches to
     # subtitles/ — the LANG: header read_youtube wrote tells them apart.
@@ -72,7 +72,7 @@ def _scan(archive: Store) -> list[dict]:
                 continue
             video_id = m.group(1)
 
-        if archive.has_youtube(video_id):
+        if store.has_youtube(video_id):
             print(f"  SKIP (already in canonical layout): {path}")
             continue
 
@@ -100,8 +100,8 @@ async def main() -> int:
     args = parser.parse_args()
 
     load_dotenv(REPO_ROOT / ".env", override=False)
-    archive = Store()
-    entries = _scan(archive)
+    store = Store()
+    entries = _scan(store)
     if not entries:
         print("Nothing to migrate.")
         return 0
@@ -123,21 +123,21 @@ async def main() -> int:
             if published_raw else None
         )
 
-        origin = str(e["path"].relative_to(archive.root / "youtube" / e["channel"]))
+        origin = str(e["path"].relative_to(store.root / "youtube" / e["channel"]))
         if not args.apply:
             date = published.date().isoformat() if published else "unknown"
             print(f"  {e['channel']}/{origin}")
             print(f"    → {e['kind']}/{date}_{e['video_id']}_{title[:40]}…")
             continue
 
-        new_path = archive.save_youtube(
+        new_path = store.save_youtube(
             e["channel"], e["kind"], e["video_id"], title, published,
             e["body"],
             method="sensevoice" if e["kind"] == "transcripts" else "yt-dlp-subs",
             extra={"migrated_from": origin, **e["old_meta"]},
         )
         # Only delete the original once the replacement is verifiably readable.
-        check = archive.find_youtube(e["video_id"])
+        check = store.find_youtube(e["video_id"])
         if check is None or not check.text:
             print(f"  ✗ verification failed, keeping original: {e['path']}")
             continue
@@ -146,7 +146,7 @@ async def main() -> int:
         print(f"  ✓ {e['channel']}: {new_path.name}")
 
     if args.apply:
-        for d in (archive.root / "youtube").glob("*/transcribed"):
+        for d in (store.root / "youtube").glob("*/transcribed"):
             if not any(d.iterdir()):
                 d.rmdir()
                 print(f"  removed empty {d.parent.name}/transcribed/")

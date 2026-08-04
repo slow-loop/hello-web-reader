@@ -45,7 +45,7 @@ def _filter_rss_results(
 
 async def _run_rss_source(
     source: SourceConfig,
-    store: Optional[ReadCache],
+    cache: Optional[ReadCache],
     no_cache: bool,
 ) -> list[ReadResult]:
     from .readers.rss import fetch_rss_entries
@@ -58,8 +58,8 @@ async def _run_rss_source(
     delay_sec = float(params.get("delay_sec", 0.0))
     cache_ttl = source.cache.ttl if source.cache.ttl is not None else RSS_CACHE_TTL_SECONDS
 
-    if store and not no_cache and url and store.rss_feed_is_fresh(url, cache_ttl):
-        cached = store.list_rss_entries(
+    if cache and not no_cache and url and cache.rss_feed_is_fresh(url, cache_ttl):
+        cached = cache.list_rss_entries(
             url,
             published_after=published_after,
             limit=limit,
@@ -75,10 +75,10 @@ async def _run_rss_source(
     if delay_sec > 0:
         await asyncio.sleep(delay_sec)
 
-    if store and url:
-        store.upsert_rss_entries(url, results)
-        store.touch_rss_feed(url)
-        return store.list_rss_entries(
+    if cache and url:
+        cache.upsert_rss_entries(url, results)
+        cache.touch_rss_feed(url)
+        return cache.list_rss_entries(
             url,
             published_after=published_after,
             limit=limit,
@@ -91,19 +91,19 @@ async def _run_rss_source(
     )
 
 
-async def _run_source(source: SourceConfig, store: Optional[ReadCache], no_cache: bool) -> list[ReadResult]:
+async def _run_source(source: SourceConfig, cache: Optional[ReadCache], no_cache: bool) -> list[ReadResult]:
     """Run a single source config and return results."""
     reader = source.reader.lower()
     url = source.url
     params = source.params
 
     if reader == "rss":
-        return await _run_rss_source(source, store, no_cache)
+        return await _run_rss_source(source, cache, no_cache)
 
     # Check cache (unless no_cache)
-    if store and not no_cache and url:
+    if cache and not no_cache and url:
         cache_ttl = source.cache.ttl if source.cache.ttl is not None else 3600
-        cached = store.get_cached(url, ttl_seconds=cache_ttl, source_type=reader)
+        cached = cache.get_cached(url, ttl_seconds=cache_ttl, source_type=reader)
         if cached:
             logger.info(f"[{source.name}] cache hit")
             return [cached]
@@ -115,10 +115,10 @@ async def _run_source(source: SourceConfig, store: Optional[ReadCache], no_cache
         results = [ReadResult.fail(url or f"{reader}://", str(e), source_type=reader)]
 
     # Save to cache
-    if store:
+    if cache:
         for r in results:
             if r.success:
-                store.save(r)
+                cache.save(r)
 
     return results
 
@@ -249,7 +249,7 @@ async def run_config(
     *,
     tags: Optional[list[str]] = None,
     no_cache: bool = False,
-    store: Optional[ReadCache] = None,
+    cache: Optional[ReadCache] = None,
 ) -> dict[str, list[ReadResult]]:
     """
     Run a feeds.yaml config and return results grouped by source name.
@@ -258,12 +258,12 @@ async def run_config(
         config_path: Path to the YAML config file.
         tags: If set, only run sources that have at least one matching tag.
         no_cache: Skip cache for all sources.
-        store: ReadCache for caching. Created automatically if None.
+        cache: ReadCache for caching. Created automatically if None.
     """
     config = load_config(config_path)
 
-    if store is None and not no_cache:
-        store = ReadCache()
+    if cache is None and not no_cache:
+        cache = ReadCache()
 
     sources = config.sources
     if tags:
@@ -274,6 +274,6 @@ async def run_config(
     results: dict[str, list[ReadResult]] = {}
     for source in sources:
         logger.info(f"[{source.name}] fetching ({source.reader})...")
-        results[source.name] = await _run_source(source, store, no_cache)
+        results[source.name] = await _run_source(source, cache, no_cache)
 
     return results

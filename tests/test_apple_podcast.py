@@ -112,18 +112,18 @@ async def test_read_podcast_round_trip_with_readstore(tmp_path):
 
     # pick the smallest mp3 so the live call is fast
     target = min(episodes, key=lambda e: e.mp3_path.stat().st_size)
-    store = ReadCache(db_path=tmp_path / "cache.sqlite")
+    cache = ReadCache(db_path=tmp_path / "cache.sqlite")
     url = f"apple-podcast://{target.uuid}"
 
     # 1st pass: cache miss, real transcription
-    assert store.get_cached(url) is None
+    assert cache.get_cached(url) is None
     fresh = await apple_podcast.read_podcast(target.uuid)
     assert fresh.success and fresh.text.strip()
     assert fresh.url == url
-    store.save(fresh)
+    cache.save(fresh)
 
     # 2nd pass: cache hit, no model call
-    cached = store.get_cached(url)
+    cached = cache.get_cached(url)
     assert cached is not None
     assert cached.text == fresh.text
     assert cached.source_type == "apple_podcast"

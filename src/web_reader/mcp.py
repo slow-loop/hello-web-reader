@@ -57,8 +57,8 @@ def build_server():
         output_format: OutputFormat = "md",
         no_cache: bool = False,
     ) -> str:
-        store = None if no_cache else ReadCache()
-        result = await read_url_impl(url, store=store, cache_ttl=3600)
+        cache = None if no_cache else ReadCache()
+        result = await read_url_impl(url, cache=cache, cache_ttl=3600)
         return format_results([result], output_format)
 
     @mcp.tool(
@@ -81,12 +81,12 @@ def build_server():
         no_cache: bool = False,
     ) -> str:
         resolved = Path(config_path).resolve()
-        store = None if no_cache else ReadCache()
+        cache = None if no_cache else ReadCache()
         results_map = await run_config(
             str(resolved),
             tags=_parse_tags(tags),
             no_cache=no_cache,
-            store=store,
+            cache=cache,
         )
         return format_results(flatten_results_map(results_map), output_format)
 
@@ -102,10 +102,10 @@ def build_server():
     ) -> str:
         from .readers.substack import search_substack as _search
 
-        store = None if no_cache else ReadCache()
+        cache = None if no_cache else ReadCache()
         result = await _search(query, page=page, filter_type=filter_type)
-        if store and result.success:
-            store.save(result)
+        if cache and result.success:
+            cache.save(result)
         return format_results([result], output_format)
 
     @mcp.tool(
@@ -118,10 +118,10 @@ def build_server():
     ) -> str:
         from .readers.substack import explore_substack as _explore
 
-        store = None if no_cache else ReadCache()
+        cache = None if no_cache else ReadCache()
         result = await _explore(tab=tab)
-        if store and result.success:
-            store.save(result)
+        if cache and result.success:
+            cache.save(result)
         return format_results([result], output_format)
 
     @mcp.tool(

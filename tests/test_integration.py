@@ -327,12 +327,12 @@ async def test_read_reddit_thread_local_server(local_server: str):
 
 
 @pytest.mark.asyncio
-async def test_read_url_uses_cache_with_real_store(local_server: str, tmp_path: Path):
-    store = ReadCache(tmp_path / "cache.db")
+async def test_read_url_uses_cache_with_real_cache(local_server: str, tmp_path: Path):
+    cache = ReadCache(tmp_path / "cache.db")
     url = f"{local_server}/article"
 
-    first = await read_url(url, store=store)
-    second = await read_url(url, store=store)
+    first = await read_url(url, cache=cache)
+    second = await read_url(url, cache=cache)
 
     assert first.success is True
     assert first.cached is False
@@ -390,10 +390,10 @@ sources:
         encoding="utf-8",
     )
 
-    store = ReadCache(tmp_path / "runner.db")
+    cache = ReadCache(tmp_path / "runner.db")
 
-    first = await run_config(str(config_path), tags=["smoke"], store=store)
-    second = await run_config(str(config_path), tags=["smoke"], store=store)
+    first = await run_config(str(config_path), tags=["smoke"], cache=cache)
+    second = await run_config(str(config_path), tags=["smoke"], cache=cache)
 
     assert list(first) == ["local-web", "local-rss"]
     assert all(first[name][0].success for name in first)
@@ -431,7 +431,7 @@ sources:
 
     monkeypatch.setattr("web_reader.runner.asyncio.sleep", _fake_sleep)
 
-    results = await run_config(str(config_path), no_cache=True, store=None)
+    results = await run_config(str(config_path), no_cache=True, cache=None)
 
     assert len(results["local-rss"]) == 2
     assert all(result.cached is False for result in results["local-rss"])

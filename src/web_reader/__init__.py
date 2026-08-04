@@ -12,8 +12,8 @@ Usage:
 
     # With caching (default: user-level shared cache, e.g. ~/Library/Caches/web-reader/)
     from web_reader import read_url, ReadCache
-    store = ReadCache()
-    result = await read_url("https://example.com", store=store)
+    cache = ReadCache()
+    result = await read_url("https://example.com", cache=cache)
 
     # CLI
     uv run web-reader fetch "https://example.com"
@@ -155,16 +155,20 @@ def WebReaderKnowledge(*args, **kwargs):
 
 async def read_url(
     url: str,
-    store: Optional[ReadCache] = None,
+    cache: Optional[ReadCache] = None,
     cache_ttl: Optional[int] = 3600,
     **kwargs,
 ) -> ReadResult:
     """
     Read a URL, auto-detecting the appropriate reader.
 
+    Note this is the scratch-cache path, not the `output/` archive — nothing
+    read here is archived. For content worth keeping, go through
+    `web_reader.store.Store` (see `web-reader fetch`).
+
     Args:
         url: The URL to read.
-        store: Optional ReadCache for caching. Pass None to skip caching.
+        cache: Optional ReadCache for caching. Pass None to skip caching.
         cache_ttl: Cache TTL in seconds. Default 1 hour. None = no TTL check.
         **kwargs: Passed through to the underlying reader.
 
@@ -174,12 +178,12 @@ async def read_url(
     source_type = detect_source_type(url)
 
     # Check cache
-    if store and source_type != "rss":
-        cached = store.get_cached(url, ttl_seconds=cache_ttl, source_type=source_type)
+    if cache and source_type != "rss":
+        cached = cache.get_cached(url, ttl_seconds=cache_ttl, source_type=source_type)
         if cached:
             return cached
         # Fallback: URL may have been pulled as part of an RSS feed
-        rss_entry = store.get_rss_entry(url)
+        rss_entry = cache.get_rss_entry(url)
         if rss_entry:
             return rss_entry
 
@@ -234,15 +238,15 @@ async def read_url(
         result = await _web(url, **kwargs)
 
     # Save to cache
-    if store and result.success and source_type != "rss":
-        store.save(result)
+    if cache and result.success and source_type != "rss":
+        cache.save(result)
 
     return result
 
 
 async def read_urls(
     urls: list[str],
-    store: Optional[ReadCache] = None,
+    cache: Optional[ReadCache] = None,
     cache_ttl: Optional[int] = 3600,
     concurrency: int = 5,
     **kwargs,
@@ -252,7 +256,7 @@ async def read_urls(
 
     Args:
         urls: List of URLs to read.
-        store: Optional ReadCache for caching.
+        cache: Optional ReadCache for caching.
         cache_ttl: Cache TTL in seconds.
         concurrency: Max concurrent requests. Default 5.
         **kwargs: Passed through to the underlying readers.
@@ -264,6 +268,6 @@ async def read_urls(
 
     async def _read_one(url: str) -> ReadResult:
         async with semaphore:
-            return await read_url(url, store=store, cache_ttl=cache_ttl, **kwargs)
+            return await read_url(url, cache=cache, cache_ttl=cache_ttl, **kwargs)
 
     return await asyncio.gather(*[_read_one(url) for url in urls])
