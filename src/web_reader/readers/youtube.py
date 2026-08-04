@@ -59,17 +59,41 @@ def _build_markdown(video_id: str, text: str, language: str) -> str:
     )
 
 
+def _video_meta(info: dict | None) -> dict:
+    """Channel / title / publish date out of a yt-dlp info dict.
+
+    Everything here is already in the dict yt-dlp hands back while fetching
+    subtitles, so a caller that wants to archive the transcript pays no extra
+    round trip for the fields the store needs.
+
+    `uploader_id` is the `@handle`, which is exactly what the store names
+    channel folders after — so a transcript pulled by `read` lands in the same
+    folder as one pulled by `channel` or `fetch`. When it is missing there is
+    no honest folder name (the display name would spawn a second folder for a
+    channel that already has one), so the caller is told rather than guessed at.
+    """
+    if not info:
+        return {}
+    return {
+        "channel": (info.get("uploader_id") or "").lstrip("@"),
+        "video_title": info.get("title") or "",
+        "upload_date": info.get("upload_date") or "",  # YYYYMMDD
+    }
+
+
 def _build_result(
     video_id: str,
     text: str,
     language: str,
     method: str,
     snippet_count: int | None = None,
+    meta: dict | None = None,
 ) -> ReadResult:
     raw: dict[str, object] = {
         "video_id": video_id,
         "language": language,
         "method": method,
+        **(meta or {}),
     }
     if snippet_count is not None:
         raw["snippet_count"] = snippet_count
@@ -77,7 +101,7 @@ def _build_result(
     return ReadResult(
         url=f"https://www.youtube.com/watch?v={video_id}",
         text=_build_markdown(video_id, text, language),
-        title=f"YouTube Video {video_id}",
+        title=(meta or {}).get("video_title") or f"YouTube Video {video_id}",
         source_type="youtube",
         language=language,
         raw=raw,
@@ -120,7 +144,31 @@ def _subtitle_language_rank(path: Path, languages: list[str]) -> tuple[int, str]
     return len(languages), filename
 
 
-def _download_ytdlp_subtitles(url: str, video_id: str, languages: list[str]) -> tuple[str, str, str] | None:
+def _fetch_video_meta(url: str) -> dict:
+    """`_video_meta` for callers outside the subtitle path (i.e. audio ASR).
+
+    Its own info request, because the subtitle path may not have run — but ASR
+    is minutes of local compute, so one metadata round trip is noise.
+    """
+    try:
+        with yt_dlp.YoutubeDL(
+            {"quiet": True, "no_warnings": True, "cookiefile": _cookiefile_path()}
+        ) as ydl:
+            return _video_meta(ydl.extract_info(url, download=False))
+    except Exception as e:
+        logger.info(f"Failed to fetch video metadata for {url}: {e}")
+        return {}
+
+
+def _download_ytdlp_subtitles(
+    url: str, video_id: str, languages: list[str]
+) -> tuple[str, str, str, dict] | None:
+    """Best subtitle track as (text, language, raw_vtt, meta).
+
+    `meta` is the archive-facing metadata from step 1's info dict; see
+    `_video_meta`.
+    """
+    meta: dict = {}
     with tempfile.TemporaryDirectory() as temp_dir:
         # Step 1: Fast extract info to detect original language
         info_opts = {
@@ -131,6 +179,7 @@ def _download_ytdlp_subtitles(url: str, video_id: str, languages: list[str]) -> 
         try:
             with yt_dlp.YoutubeDL(info_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
+                meta = _video_meta(info)
                 if info and info.get("language"):
                     # e.g. "en-US" -> "en"
                     base_lang = info.get("language").split("-")[0]
@@ -182,7 +231,7 @@ def _download_ytdlp_subtitles(url: str, video_id: str, languages: list[str]) -> 
             if len(stem_parts) >= 2:
                 language = stem_parts[-1]
 
-            return text, language, raw_vtt
+            return text, language, raw_vtt, meta
 
     return None
 
@@ -218,13 +267,14 @@ async def read_youtube(
         # An empty track is not a transcript — fall through to audio rather than
         # return a "successful" empty result that callers would cache or write.
         if subtitle_result and subtitle_result[0].strip():
-            text, language, raw_vtt = subtitle_result
+            text, language, raw_vtt, meta = subtitle_result
             res = _build_result(
                 video_id,
                 text,
                 language,
                 method="yt-dlp-subs",
                 snippet_count=len(text.splitlines()),
+                meta=meta,
             )
             res.raw["vtt"] = raw_vtt
             return res
@@ -244,11 +294,19 @@ async def read_youtube(
             # Silent-video ASR yields nothing. Failing here keeps the caller from
             # writing a header-only file that a resume would then skip forever.
             return ReadResult.fail(url, "Transcription produced no text", source_type="youtube")
+        # `language` carries a language, never a provenance marker — how the
+        # text was produced is `method`'s job. This path has none to report:
+        # transcribe_youtube returns bare text, so SenseVoice's own language
+        # detection never reaches us.
         return _build_result(
             video_id,
             transcript_text,
-            "ai-transcribed",
-            method="ai-whisper",
+            "unknown",
+            # `sensevoice`, not `ai-sensevoice`: that is what the 900+ archived
+            # files already say, and the caption method is a bare `yt-dlp-subs`
+            # with no `ai-` prefix either.
+            method="sensevoice",
+            meta=_fetch_video_meta(url),
         )
     except Exception as e:
         return ReadResult.fail(url, f"All strategies failed: {e}", source_type="youtube")
@@ -268,6 +326,20 @@ def _channel_lookup_params(channel_id_or_handle: str) -> dict[str, str]:
     if value.startswith("UC") and len(value) == 24:
         return {"id": value}
     return {"forHandle": value if value.startswith("@") else f"@{value}"}
+
+
+def _raise_api_error(resp: httpx.Response, api_key: str) -> None:
+    """Raise on a Data API error, keeping Google's machine-readable reason.
+
+    `resp.raise_for_status()` reports only the status code, but the reason that
+    actually tells you what to do — quotaExceeded vs rateLimitExceeded vs
+    keyInvalid, all of them 403 — lives in the body. The request URL carries the
+    API key, so build the message from the body alone and redact the key.
+    """
+    if not resp.is_error:
+        return
+    detail = resp.text.replace(api_key, "<redacted>").strip()[:500]
+    raise RuntimeError(f"YouTube Data API {resp.status_code}: {detail}")
 
 
 async def fetch_channel_info(channel_id_or_handle: str) -> dict:
@@ -295,7 +367,7 @@ async def fetch_channel_info(channel_id_or_handle: str) -> dict:
         resp = await client.get(
             "https://www.googleapis.com/youtube/v3/channels", params=params, headers=headers
         )
-        resp.raise_for_status()
+        _raise_api_error(resp, api_key)
         items = resp.json().get("items") or []
 
     if not items:
@@ -357,9 +429,10 @@ async def list_channel_videos(
                 params["pageToken"] = next_page_token
 
             resp = await client.get(url, params=params, headers=headers)
-            resp.raise_for_status()
+            _raise_api_error(resp, api_key)
             data = resp.json()
 
+            reached_older_than_since = False
             for item in data.get("items", []):
                 snippet = item.get("snippet", {})
                 video_id = snippet.get("resourceId", {}).get("videoId")
@@ -368,7 +441,17 @@ async def list_channel_videos(
 
                 published_at = snippet.get("publishedAt", "")
                 day = published_at[:10]
-                if (since and day < since) or (until and day > until):
+                if since and day < since:
+                    # Uploads arrive newest-first, so the first *dated* item
+                    # older than `since` means every later item is older too —
+                    # stop paging instead of walking the whole channel history.
+                    # Undated items sort as "" and would fake that signal, so
+                    # they only get skipped.
+                    if day:
+                        reached_older_than_since = True
+                        break
+                    continue
+                if until and day > until:
                     continue
 
                 results.append({
@@ -379,6 +462,9 @@ async def list_channel_videos(
                     "thumbnail": _best_thumbnail(snippet.get("thumbnails", {})),
                 })
 
+            if reached_older_than_since:
+                break
+
             # Items arrive newest-first, so the first `limit` matches are the
             # newest `limit` matches — stop paging once we have them.
             if limit and len(results) >= limit:
@@ -388,7 +474,10 @@ async def list_channel_videos(
             if not next_page_token:
                 break
 
-    return results
+    # Truncate here too: breaking out on the `since` boundary (or on the last
+    # page) skips the in-loop `limit` return, so a page holding more than
+    # `limit` matches would otherwise hand back more than the caller asked for.
+    return results[:limit] if limit else results
 
 
 def _best_thumbnail(thumbnails: dict) -> str | None:
@@ -424,7 +513,7 @@ async def fetch_video_details(video_ids: list[str]) -> dict[str, dict]:
                 "key": api_key,
             }
             resp = await client.get(url, params=params, headers=headers)
-            resp.raise_for_status()
+            _raise_api_error(resp, api_key)
             for item in resp.json().get("items", []):
                 details[item["id"]] = item
 

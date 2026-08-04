@@ -23,6 +23,12 @@ from .store import Store, safe_name as _safe_name
 from .formatting import flatten_results_map, format_results
 from .cache import ReadCache
 
+# Two different things, kept visibly apart:
+#   Store     — the output/ archive, the permanent home of fetched content.
+#   ReadCache — a short-TTL SQLite scratch cache for repeat reads.
+# Never name a ReadCache variable `store`; that confusion is what let `read`
+# drift away from the archive contract for months without anyone noticing.
+
 app = typer.Typer(
     help="Lightweight web reader — fetch structured content from URLs and feeds.",
     add_completion=False,
@@ -42,20 +48,111 @@ def _setup_logging(verbose: bool):
     else:
         logging.basicConfig(level=logging.WARNING)
 
+def _stored_as_result(item):
+    """A store hit, shaped like a fresh read so stdout is byte-identical."""
+    from .models import ReadResult
+
+    return ReadResult(
+        url=item.url,
+        text=item.text,
+        title=item.title or item.url,
+        source_type="youtube",
+        language=item.extra.get("language"),
+        raw=dict(item.extra),
+        cached=True,
+    )
+
+
+async def _run_youtube(url: str, lang: Optional[str], output_format: str, use_asr: bool) -> None:
+    """One video: serve it from the store, or fetch it into the store.
+
+    The store is the cache here, not ReadCache. A published transcript never
+    changes, so "is this video id anywhere in output/" is the only freshness
+    question worth asking — and it is the same question `fetch` and `channel`
+    ask before spending a yt-dlp round trip. Sharing it means a video pulled by
+    any of the three is never pulled again by the others.
+    """
+    from datetime import datetime
+
+    from .readers.youtube import _extract_video_id, read_youtube
+
+    store = Store()
+    video_id = _extract_video_id(url)
+    if not video_id:
+        typer.echo(f"ERROR: could not extract a video id from {url}", err=True)
+        raise typer.Exit(1)
+
+    hit = store.find_youtube(video_id)
+    if hit:
+        typer.echo(f"Cached: {hit.path}", err=True)
+        _print_results([_stored_as_result(hit)], output_format)
+        return
+
+    result = await read_youtube(
+        url, languages=[lang] if lang else None, use_audio_fallback=use_asr
+    )
+    if not result.success:
+        # `read` is commonly redirected into a transcript file. Keep failures
+        # off stdout so a failed acquisition cannot masquerade as a transcript.
+        typer.echo(f"ERROR: {result.error or 'Read failed'}", err=True)
+        raise typer.Exit(1)
+
+    raw = result.raw or {}
+    method = raw.get("method", "unknown")
+    channel = raw.get("channel") or ""
+    if channel:
+        upload_date = raw.get("upload_date") or ""
+        published = datetime.strptime(upload_date, "%Y%m%d") if len(upload_date) == 8 else None
+        path = store.save_youtube(
+            channel,
+            # File by what actually happened: a video the API calls caption-less
+            # can still resolve via an auto-generated track.
+            "subtitles" if method == "yt-dlp-subs" else "transcripts",
+            video_id,
+            raw.get("video_title") or f"YouTube Video {video_id}",
+            published,
+            result.text,
+            language=result.language,
+            method=method,
+        )
+        typer.echo(f"Stored: {path}  (method={method}, language={result.language})", err=True)
+    else:
+        # No @handle, no honest folder name: the channel's display name would
+        # spawn a second folder for a channel that already has one. Hand the
+        # transcript over and say why it was not filed.
+        typer.echo(
+            f"Not stored: yt-dlp reported no channel handle for {video_id} "
+            f"(method={method}) — transcript printed only",
+            err=True,
+        )
+
+    _print_results([result], output_format)
+
+
 async def _run_url(
     url: str,
     no_cache: bool,
     output_format: str,
     lang: Optional[str] = None,
+    use_asr: bool = True,
 ) -> None:
     """Fetch a single URL."""
     from ._detect import detect_source_type
 
     source_type = detect_source_type(url)
-    store = ReadCache() if not no_cache else None
 
-    if store and source_type != "rss":
-        cached = store.get_cached(url, ttl_seconds=3600, source_type=source_type)
+    # YouTube is the one source type with a home in the store, so it gets the
+    # store instead of the scratch cache. Everything else here is a page we do
+    # not archive — per the pipeline's own rule, non-YouTube sources go through
+    # OpenCLI, not this tool — so ReadCache stays their only memory.
+    if source_type == "youtube":
+        await _run_youtube(url, lang, output_format, use_asr)
+        return
+
+    cache = ReadCache() if not no_cache else None
+
+    if cache and source_type != "rss":
+        cached = cache.get_cached(url, ttl_seconds=3600, source_type=source_type)
         if cached:
             _print_results([cached], output_format)
             return
@@ -70,10 +167,10 @@ async def _run_url(
         period = qs.get("period", [None])[0]
         max_results = int(qs.get("max", [10])[0])
         results = await read_gnews(query, period=period, max_results=max_results)
-        if store:
+        if cache:
             for r in results:
                 if r.success:
-                    store.save(r)
+                    cache.save(r)
         _print_results(results, output_format)
         return
     elif source_type == "ptt":
@@ -101,10 +198,6 @@ async def _run_url(
     elif source_type == "substack":
         from .readers.substack import read_substack
         result = await read_substack(url)
-    elif source_type == "youtube":
-        from .readers.youtube import read_youtube
-        languages = [lang] if lang else None
-        result = await read_youtube(url, languages=languages)
     elif source_type == "rss":
         from .readers.rss import read_rss
         result = await read_rss(url)
@@ -115,30 +208,14 @@ async def _run_url(
         from .readers.web import read_web
         result = await read_web(url)
 
-    if store and result.success and source_type != "rss":
-        store.save(result)
+    if not result.success:
+        # `read` is commonly redirected into a transcript file. Keep failures
+        # off stdout so a failed acquisition cannot masquerade as a transcript.
+        typer.echo(f"ERROR: {result.error or 'Read failed'}", err=True)
+        raise typer.Exit(1)
 
-    if result.raw and "vtt" in result.raw:
-        video_id = result.raw.get("video_id", "video")
-        lang = result.raw.get("language", "unknown")
-        
-        # Save VTT
-        vtt_path = f"{video_id}_{lang}.vtt"
-        try:
-            with open(vtt_path, "w", encoding="utf-8") as f:
-                f.write(str(result.raw["vtt"]))
-            logging.getLogger(__name__).info(f"Saved VTT to {vtt_path}")
-        except Exception as e:
-            logging.getLogger(__name__).error(f"Failed to save VTT: {e}")
-            
-        # Save MD
-        md_path = f"{video_id}_{lang}.md"
-        try:
-            with open(md_path, "w", encoding="utf-8") as f:
-                f.write(format_results([result], output_format))
-            logging.getLogger(__name__).info(f"Saved MD to {md_path}")
-        except Exception as e:
-            logging.getLogger(__name__).error(f"Failed to save MD: {e}")
+    if cache and source_type != "rss":
+        cache.save(result)
 
     _print_results([result], output_format)
 
@@ -178,6 +255,7 @@ async def _run_channel(
     transcribe: bool,
     languages: list[str] | None,
     out_dir,
+    channel_key: str,
 ) -> None:
     """List a channel's videos with full API metadata, and optionally download
     thumbnails and subtitle transcripts."""
@@ -275,7 +353,9 @@ async def _run_channel(
     # Transcript storage goes through the store contract (frontmatter,
     # canonical paths, global dedupe by video id) — the same layout `fetch`
     # writes and downstream consumers read. --out only moves the snapshot
-    # files above, never the transcripts.
+    # files above, never the transcripts: the store folder comes from
+    # `channel_key` (the parsed handle), never from the snapshot path, so
+    # `--out /tmp/scratch` cannot file a channel's videos under "scratch".
     store = Store()
 
     async def _save_transcripts(targets: list[dict], use_audio: bool) -> None:
@@ -300,7 +380,7 @@ async def _run_channel(
             # (auto-generated tracks) — file it by what actually happened.
             actual_kind = "subtitles" if method == "yt-dlp-subs" else "transcripts"
             path = store.save_youtube(
-                out_dir.name, actual_kind, r["video_id"], r["title"], published,
+                channel_key, actual_kind, r["video_id"], r["title"], published,
                 result.text, language=result.language, method=method,
             )
             took = f"{r['duration']} audio in {time.monotonic() - started:.0f}s" if use_audio else (result.language or "?")
@@ -312,7 +392,7 @@ async def _run_channel(
         targets = [r for r in rows if r["caption"] == "true"]
         print(
             f"\nSubtitles: {len(targets)}/{len(rows)} videos have captions "
-            f"(est. ~{max(1, round(len(targets) * 3 / 60))} min) -> {store.youtube_dir(out_dir.name) / 'subtitles'}"
+            f"(est. ~{max(1, round(len(targets) * 3 / 60))} min) -> {store.youtube_dir(channel_key) / 'subtitles'}"
         )
         await _save_transcripts(targets, use_audio=False)
 
@@ -324,7 +404,7 @@ async def _run_channel(
         audio_min = sum(_duration_seconds(r["duration"]) for r in targets) / 60
         print(
             f"\nTranscripts: {len(targets)}/{len(rows)} videos have no captions, "
-            f"{audio_min / 60:.1f}h of audio -> {store.youtube_dir(out_dir.name) / 'transcripts'}"
+            f"{audio_min / 60:.1f}h of audio -> {store.youtube_dir(channel_key) / 'transcripts'}"
         )
         await _save_transcripts(targets, use_audio=True)
 
@@ -335,8 +415,8 @@ async def _run_config(config_path: str, tags: list[str] | None, no_cache: bool, 
     """Run a YAML config file."""
     from .runner import run_config
 
-    store = ReadCache() if not no_cache else None
-    results_map = await run_config(config_path, tags=tags, no_cache=no_cache, store=store)
+    cache = ReadCache() if not no_cache else None
+    results_map = await run_config(config_path, tags=tags, no_cache=no_cache, cache=cache)
     _print_results(flatten_results_map(results_map), output_format)
 
 
@@ -347,12 +427,17 @@ def read(
     no_cache: bool = typer.Option(False, "--no-cache", help="Skip cache, always re-fetch"),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
     lang: Optional[str] = typer.Option(None, help="Specific subtitle language for YouTube (e.g. 'en')"),
+    no_asr: bool = typer.Option(False, "--no-asr", help="YouTube: fail instead of falling back to local audio ASR (minutes of compute)."),
 ):
     """
     Read a single URL and output structured text.
+
+    A YouTube video is archived into the output/ store on the way through —
+    same folder `channel` and `fetch` write — and served straight from there on
+    a repeat read, without touching the network.
     """
     _setup_logging(verbose)
-    asyncio.run(_run_url(url, no_cache, format, lang=lang))
+    asyncio.run(_run_url(url, no_cache, format, lang=lang, use_asr=not no_asr))
 
 
 @app.command()
@@ -381,7 +466,7 @@ def channel(
     subtitles: bool = typer.Option(False, "--subtitles", help="Also fetch subtitle transcripts where available."),
     transcribe: bool = typer.Option(False, "--transcribe", help="Audio-transcribe the videos that have NO captions (slow, local ASR)."),
     lang: Optional[str] = typer.Option(None, help="Comma-separated preferred subtitle languages (e.g. 'zh-Hant,en')."),
-    out: Optional[str] = typer.Option(None, help="Directory for snapshot files (manifest/videos/thumbnails); default ./output/youtube/<handle>. Subtitle/ASR transcripts always land in the output/ store."),
+    out: Optional[str] = typer.Option(None, help="Directory for snapshot files (manifest/videos/thumbnails); default <repo>/output/youtube/<handle>. Subtitle/ASR transcripts always land in the output/ store, under the handle — --out never moves them."),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
 ):
     """
@@ -405,9 +490,16 @@ def channel(
     # @handle land in the same place.
     lookup = _channel_lookup_params(handle)
     handle_name = _safe_name(lookup.get("forHandle", lookup.get("id", "")).lstrip("@")) or "channel"
-    out_dir = Path(out) if out else Path("output") / "youtube" / handle_name
+    # Default the snapshot dir off the store's own root, not a cwd-relative
+    # "output/". They are the same folder only when you happen to run from the
+    # repo root; anywhere else a bare relative path splits the snapshot files
+    # away from the transcripts they describe.
+    out_dir = Path(out) if out else Store().youtube_dir(handle_name)
     asyncio.run(
-        _run_channel(handle, limit, since, until, thumbnails, subtitles, transcribe, languages, out_dir)
+        _run_channel(
+            handle, limit, since, until, thumbnails, subtitles, transcribe,
+            languages, out_dir, handle_name,
+        )
     )
 
 
@@ -432,8 +524,17 @@ def fetch(
 
     _setup_logging(verbose)
     results = asyncio.run(fetch_watchlist(watchlist, since, source, limit, dry_run))
-    if results and all(r.error for r in results):
+    if not results:
+        return
+    # Exit 3 for a partial failure. Callers pull from the archive after this
+    # returns, so "8 of 35 sources failed" must not look like a clean run —
+    # otherwise the stale items still in the archive get served as fresh.
+    # Not 2: click already spends that on usage errors, and a caller that sees
+    # 2 could not tell a mistyped flag from sources that genuinely failed.
+    if all(r.error for r in results):
         raise typer.Exit(1)
+    if any(r.error for r in results):
+        raise typer.Exit(3)
 
 
 def main():

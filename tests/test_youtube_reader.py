@@ -29,7 +29,10 @@ async def test_read_youtube_prefers_ytdlp_subtitles(monkeypatch):
     monkeypatch.setattr(
         youtube,
         "_download_ytdlp_subtitles",
-        lambda url, video_id, languages: ("Hello\nWorld", "en", "WEBVTT\n..."),
+        lambda url, video_id, languages: (
+            "Hello\nWorld", "en", "WEBVTT\n...",
+            {"channel": "somechannel", "video_title": "Some Video", "upload_date": "20260115"},
+        ),
     )
 
     async def fail_audio(url):
@@ -43,6 +46,11 @@ async def test_read_youtube_prefers_ytdlp_subtitles(monkeypatch):
     assert result.language == "en"
     assert result.raw["method"] == "yt-dlp-subs"
     assert "TRANSCRIPT:\nHello\nWorld" in result.text
+    # The archive-facing fields ride along on the info dict yt-dlp already
+    # fetched, so `read` can file the transcript without a second lookup.
+    assert result.raw["channel"] == "somechannel"
+    assert result.raw["upload_date"] == "20260115"
+    assert result.title == "Some Video"
 
 
 @pytest.mark.asyncio
@@ -68,8 +76,10 @@ async def test_read_youtube_falls_back_to_audio(monkeypatch):
     result = await youtube.read_youtube("https://www.youtube.com/watch?v=abc123")
 
     assert result.success is True
-    assert result.language == "ai-transcribed"
-    assert result.raw["method"] == "ai-whisper"
+    # Provenance belongs to `method`, never to `language` — a consumer
+    # filtering by language must not find "ai-transcribed" sitting there.
+    assert result.language == "unknown"
+    assert result.raw["method"] == "sensevoice"
     assert "AI transcript text" in result.text
 
 

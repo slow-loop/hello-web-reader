@@ -333,48 +333,7 @@ class ReadCache:
                 return record.to_read_result()
             return None
 
-    def search_by_url(self, url: str) -> list[ReadRecord]:
-        """Find all records matching a URL."""
-        with Session(self.engine) as session:
-            stmt = select(ReadRecord).where(ReadRecord.url == url)
-            return list(session.exec(stmt).all())
-
-    def list_records(
-        self,
-        source_type: Optional[str] = None,
-        success: Optional[bool] = None,
-        limit: int = 50,
-        offset: int = 0,
-        hours_ago: Optional[int] = None,
-    ) -> list[ReadRecord]:
-        """List records with filtering and pagination."""
-        with Session(self.engine) as session:
-            stmt = select(ReadRecord)
-            if source_type:
-                stmt = stmt.where(ReadRecord.source_type == source_type)
-            if success is not None:
-                stmt = stmt.where(ReadRecord.success == success)
-            if hours_ago:
-                cutoff = _utcnow() - timedelta(hours=hours_ago)
-                stmt = stmt.where(ReadRecord.created_at >= cutoff)
-
-            stmt = stmt.order_by(ReadRecord.created_at.desc())
-            stmt = stmt.limit(limit).offset(offset)
-            return list(session.exec(stmt).all())
-
-    def search_text(
-        self,
-        query: str,
-        source_type: Optional[str] = None,
-        limit: int = 50,
-    ) -> list[ReadRecord]:
-        """Simple text search using LIKE."""
-        with Session(self.engine) as session:
-            stmt = select(ReadRecord)
-            if source_type:
-                stmt = stmt.where(ReadRecord.source_type == source_type)
-            if query:
-                stmt = stmt.where(ReadRecord.text.like(f"%{query}%"))
-            stmt = stmt.order_by(ReadRecord.created_at.desc())
-            stmt = stmt.limit(limit)
-            return list(session.exec(stmt).all())
+    # `search_by_url` / `list_records` / `search_text` lived here and were never
+    # called by anything. Browsing and searching belong over `output/`, which
+    # holds the content worth keeping; this cache only holds pages nobody
+    # decided to archive, so searching it would answer the wrong question.

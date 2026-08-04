@@ -32,8 +32,18 @@ cp feeds.example.yaml feeds.yaml   # customise your sources
 ### Single URL
 
 ```bash
-uv run web-reader <URL> [--format=md|json] [--no-cache] [-v]
+uv run web-reader read <URL> [--format=md|json] [--no-cache] [--no-asr] [-v]
 ```
+
+A YouTube video is archived into the `output/` store on the way through — the
+same `output/youtube/<handle>/{subtitles,transcripts}/` that `channel` and
+`fetch` write — and a repeat read is served from there without touching the
+network. `read`, `channel` and `fetch` therefore never re-fetch each other's
+videos. Add `--no-asr` to fail instead of falling back to local audio
+transcription, which costs minutes of compute on a caption-less video.
+
+Other source types are printed and kept only in the short-TTL scratch cache;
+they have no home in `output/`.
 
 | Source | Example |
 |---|---|
@@ -84,8 +94,10 @@ uv run web-reader channel @example --limit 50 --thumbnails
 uv run web-reader channel @example --limit 50 --subtitles --lang zh-Hant,en
 ```
 
-Output goes to `./output/<handle>/` (`manifest.csv`, `thumbnails/`, `subtitles/`)
-unless `--out` is given. Re-running skips thumbnails/subtitles already on disk.
+Snapshot files (`manifest_<stamp>.csv`, `videos_<stamp>.json`, `thumbnails/`) go
+to `output/youtube/<handle>/` unless `--out` is given. Transcripts always go
+through the store contract — `output/youtube/<handle>/{subtitles,transcripts}/`,
+never moved by `--out`. Re-running skips what is already on disk.
 
 > `gnews` returns title + source URL only. To get full text, pipe the URL back through `web-reader`.
 
@@ -171,7 +183,7 @@ result = await read_ptt("https://www.ptt.cc/bbs/Stock/M.xxx.html")
 # With cache (shared across projects by default: ~/Library/Caches/web-reader/cache.db)
 from web_reader import ReadCache
 cache = ReadCache()
-result = await read_url("https://example.com", store=cache, cache_ttl=3600)
+result = await read_url("https://example.com", cache=cache, cache_ttl=3600)
 ```
 
 ## Scripts
