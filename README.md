@@ -17,8 +17,14 @@ uv add "web-reader @ git+https://github.com/w121211/hello-web-reader.git@v0.1.0"
 # Or clone and run standalone
 git clone https://github.com/w121211/hello-web-reader.git
 cd hello-web-reader
-uv sync
+uv sync                        # readers only
+uv sync --extra transcribe     # + local ASR (funasr / torch, ~2GB)
 ```
+
+`fetch` needs the `transcribe` extra whenever the watchlist has `rss_podcast`
+sources or caption-less YouTube videos — without it those items fail one by one
+with `No module named 'funasr'`, the run still exits 3 ("partial"), and the
+missing episodes look like a quiet day rather than a broken install.
 
 Copy the env template and fill in your keys:
 
