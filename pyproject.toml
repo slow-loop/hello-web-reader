@@ -2,7 +2,11 @@
 name = "web-reader"
 version = "0.1.0"
 description = "Lightweight async web reader — URL in, clean text out."
-requires-python = ">=3.13"
+# Upper bound is onnxruntime's, not ours: SenseVoice ASR pulls it in and it
+# ships no cp314 wheel. Without the bound uv picks the newest interpreter on the
+# machine (3.14.4 here), the venv fails to build, and `fetch` exits 2 before it
+# touches the network — which downstream reads as "no news today".
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "httpx>=0.27",
     "pydantic>=2.0",
