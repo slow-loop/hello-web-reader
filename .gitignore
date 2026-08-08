@@ -230,3 +230,8 @@ www.*.com_cookies.txt
 
 # Personal watchlists (same policy as feeds.yaml)
 watchlist.yaml
+
+# playwright/ subfolder (Node.js, independent of the Python package)
+playwright/node_modules/
+playwright/*.mp4
+playwright/*.webm
