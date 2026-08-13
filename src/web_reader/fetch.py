@@ -204,23 +204,35 @@ async def _fetch_youtube(
     # The only distinction that matters for cost is captions vs no captions —
     # manual and auto are both just a subtitle download. The Data API's
     # `contentDetails.caption` sees manual tracks only, so it cannot make that
-    # split: a dry-run built on it labels a free auto-captioned video the same
-    # as one facing ASR. That ambiguity nearly cost us a top source (ILTB read
-    # as "68 min ASR"; the real fetch took 13s and no ASR), so dry-run pays
-    # ~1.5s/video to ask for real. A live fetch does not probe — it finds out
-    # by doing, and reports the same number below as a fact.
+    # split, and a dry-run built on it labels a free auto-captioned video the
+    # same as one facing ASR. That ambiguity nearly cost us a top source (ILTB
+    # read as "68 min ASR"; the real fetch took 13s and no ASR).
+    #
+    # Answering it needs a yt-dlp request, and those are the genuinely scarce
+    # resource here — enough of them back to back and YouTube rate-limits the
+    # whole session, taking the day's real fetch down with it. Everything above
+    # this point is Data API (quota, not rate limits), so a per-video probe
+    # would be the only thing in dry-run able to break the live run.
+    #
+    # So probe once and describe the channel, not each video: whether a channel
+    # captions its uploads is a property of the channel, and "is this a channel
+    # we want to pay ASR for" is a channel-level decision anyway. Sampled, so
+    # say so — a channel with inconsistent captions will not match every video.
+    dry_run_sample = probe_captions(todo[0]["url"]) if (dry_run and todo) else None
+    if dry_run and todo:
+        if dry_run_sample:
+            print(f"    channel has {dry_run_sample} captions (sampled newest) → no ASR")
+        else:
+            h = sum(v["duration_seconds"] for v in todo) / 3600
+            print(f"    ⚠ no captions on newest video → ASR likely for all {len(todo)}: "
+                  f"{h:.1f}h (~{h / ASR_REALTIME_FACTOR * 60:.0f} min)")
+
     languages = source.params.get("languages")
     asr_seconds = 0
     for v in todo:
         date = (v.get("published_at") or "??????????")[:10]
         if dry_run:
-            track = probe_captions(v["url"])
-            if track:
-                label = f"{track} captions"
-            else:
-                label = "NO CAPTIONS → ASR"
-                asr_seconds += v["duration_seconds"]
-            print(f"    would fetch [{label}]: {date}  {v['title'][:60]}")
+            print(f"    would fetch: {date}  {v['title'][:60]}")
             res.new += 1
             continue
         r = await read_youtube(v["url"], languages=languages, use_audio_fallback=True)
@@ -245,13 +257,13 @@ async def _fetch_youtube(
         print(f"    ✓ {kind}/{path.name}")
         res.new += 1
 
-    # Only surfaced for videos with neither manual nor auto captions — the one
-    # case that costs anything. "No manual captions" on its own does not.
-    hours = asr_seconds / 3600
-    if hours:
-        verb = "would need" if dry_run else "transcribed by"
-        print(f"    ⚠ {hours:.1f}h of video has no captions at all → {verb} ASR "
-              f"(~{hours / ASR_REALTIME_FACTOR * 60:.0f} min)")
+    # Only surfaced for videos that turned out to have neither manual nor auto
+    # captions — the one case that costs anything. "No manual captions" on its
+    # own does not. Dry-run reports its (sampled) estimate further up instead.
+    if asr_seconds:
+        h = asr_seconds / 3600
+        print(f"    ⚠ {h:.1f}h of video had no captions at all → transcribed by ASR "
+              f"(~{h / ASR_REALTIME_FACTOR * 60:.0f} min)")
     return res
 
 
