@@ -200,18 +200,16 @@ async def _fetch_youtube(
         print(f"    ⚠ {len(todo)} videos to fetch, doing newest {limit} (raise --limit to widen)")
         todo = todo[:limit]
 
-    # `caption` in the API only reports *manual* tracks and cannot be asked about
-    # auto-captions — those resolve via yt-dlp at fetch time. So this is a ceiling
-    # assuming none of these have auto-captions either, which is rarely the case.
-    # Name the free path and mark the number as a bound: an unqualified
-    # "8.4h audio, 68 min ASR" reads as a bill, and a good source gets dropped
-    # over a cost that never materialises.
-    asr_h = sum(v["duration_seconds"] for v in todo if not v["has_captions"]) / 3600
-    if asr_h:
-        print(f"    {sum(1 for v in todo if not v['has_captions'])} video(s) → auto-captions (free) "
-              f"if available, else ASR ≤{asr_h / ASR_REALTIME_FACTOR * 60:.0f} min ({asr_h:.1f}h audio)")
+    # No pre-emptive ASR estimate here. `caption` in the API only reports
+    # *manual* tracks and cannot be asked about auto-captions, so the only
+    # number we could print before fetching is "videos without manual captions"
+    # — a set that is mostly free (auto-captions) and says nothing about cost.
+    # Printing it as hours-of-audio nearly cost us a top source: ILTB was read
+    # as "no captions, 68 min ASR" when the real fetch took 13s and zero ASR.
+    # Cost is reported below, when it is a fact rather than a guess.
 
     languages = source.params.get("languages")
+    asr_seconds = 0
     for v in todo:
         date = (v.get("published_at") or "??????????")[:10]
         label = "captions" if v["has_captions"] else "auto-caps/ASR"
@@ -236,8 +234,17 @@ async def _fetch_youtube(
             channel_dir, kind, v["id"], v["title"], published, r.text,
             language=r.language, method=method,
         )
+        if kind == "transcripts":
+            asr_seconds += v["duration_seconds"]
         print(f"    ✓ {kind}/{path.name}")
         res.new += 1
+
+    # Only surfaced when ASR actually ran — i.e. the video had neither manual
+    # nor auto captions. That is the case worth flagging; "no manual captions"
+    # on its own is not.
+    if asr_seconds:
+        print(f"    ⚠ no captions at all on {asr_seconds / 3600:.1f}h of video "
+              f"→ transcribed by ASR (~{asr_seconds / 3600 / ASR_REALTIME_FACTOR * 60:.0f} min)")
     return res
 
 
