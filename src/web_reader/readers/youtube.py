@@ -160,6 +160,37 @@ def _fetch_video_meta(url: str) -> dict:
         return {}
 
 
+def probe_captions(url: str) -> Optional[str]:
+    """Which track a fetch would land on: "manual", "auto", or None for neither.
+
+    None is the only expensive case — no captions of any kind means the fetch
+    falls back to ASR. Manual and auto are both just a subtitle download, so
+    callers reporting cost should treat them as one category ("has captions").
+
+    The YouTube Data API cannot answer this: its `contentDetails.caption` flag
+    covers manual tracks only, and reporting *that* as the cost signal reads as
+    "no captions" for the very common channel that has auto-captions and costs
+    nothing. Hence a real request here — ~1.5s, and worth it to stop guessing.
+
+    Returns None on failure too; callers should treat that as "unknown" rather
+    than assume the expensive path.
+    """
+    try:
+        with yt_dlp.YoutubeDL(
+            {"skip_download": True, "quiet": True, "no_warnings": True,
+             "noprogress": True, "cookiefile": _cookiefile_path()}
+        ) as ydl:
+            info = ydl.extract_info(url, download=False) or {}
+    except Exception as e:
+        logger.info(f"Caption probe failed for {url}: {e}")
+        return None
+    if info.get("subtitles"):
+        return "manual"
+    if info.get("automatic_captions"):
+        return "auto"
+    return None
+
+
 def _download_ytdlp_subtitles(
     url: str, video_id: str, languages: list[str]
 ) -> tuple[str, str, str, dict] | None:
