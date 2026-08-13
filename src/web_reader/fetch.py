@@ -200,12 +200,16 @@ async def _fetch_youtube(
         print(f"    ⚠ {len(todo)} videos to fetch, doing newest {limit} (raise --limit to widen)")
         todo = todo[:limit]
 
-    # `caption` in the API only reports *manual* tracks; auto-captions still
-    # resolve via yt-dlp at fetch time, so this is a worst-case ASR estimate.
+    # `caption` in the API only reports *manual* tracks and cannot be asked about
+    # auto-captions — those resolve via yt-dlp at fetch time. So this is a ceiling
+    # assuming none of these have auto-captions either, which is rarely the case.
+    # Name the free path and mark the number as a bound: an unqualified
+    # "8.4h audio, 68 min ASR" reads as a bill, and a good source gets dropped
+    # over a cost that never materialises.
     asr_h = sum(v["duration_seconds"] for v in todo if not v["has_captions"]) / 3600
     if asr_h:
-        print(f"    {sum(1 for v in todo if not v['has_captions'])} video(s) without manual captions, "
-              f"{asr_h:.1f}h audio (worst case ~{asr_h / ASR_REALTIME_FACTOR * 60:.0f} min ASR)")
+        print(f"    {sum(1 for v in todo if not v['has_captions'])} video(s) → auto-captions (free) "
+              f"if available, else ASR ≤{asr_h / ASR_REALTIME_FACTOR * 60:.0f} min ({asr_h:.1f}h audio)")
 
     languages = source.params.get("languages")
     for v in todo:
