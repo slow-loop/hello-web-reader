@@ -37,7 +37,6 @@ YTDLP_REQUEST_DELAY_SECONDS = 7
 
 DEFAULT_PODCAST_LIMIT = 5
 DEFAULT_YOUTUBE_LIMIT = 10
-SHORTS_MAX_SECONDS = 60
 
 _RELATIVE_SINCE_RE = re.compile(r"^-(\d+)([hdm])$")
 _ISO8601_DURATION_RE = re.compile(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$")
@@ -188,9 +187,6 @@ async def _fetch_youtube(
             skipped["still live / upcoming"] += 1
             continue
         duration = _iso_duration_seconds(content.get("duration", ""))
-        if 0 < duration <= SHORTS_MAX_SECONDS:
-            skipped["shorts"] += 1
-            continue
         v["duration_seconds"] = duration
         v["has_captions"] = content.get("caption") == "true"
         todo.append(v)
