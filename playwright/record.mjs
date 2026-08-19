@@ -1,10 +1,26 @@
 #!/usr/bin/env node
-// Usage: node record.mjs <url> [--out=out.mp4] [--width=1280] [--height=800]
+// Usage: node record.mjs <url> [--out=out.mp4] [--width=1280] [--height=720]
 //        [--step=700] [--hold=1200] [--max-slides=60] [--headless]
+//        [--dpr=2] [--wait=3000] [--click="關閉,我知道了"]
 // Slideshow-style capture: jump `step` px, hold `hold` ms, jump again — not
 // a continuous scroll animation. Runs headed by default so you can watch and
 // dismiss cookie banners / login walls as they come up; pass --headless for
 // unattended/batch runs.
+//
+// The viewport is the video's aspect ratio — keep it a shape a real browser
+// window has (the 1280x720 default is 16:9). Do NOT set it to whatever box the
+// consuming layout happens to reserve: a layout band is a bounding box that
+// content gets fitted into, not a ratio to stretch the browser to.
+//
+// --dpr renders at N device pixels per CSS pixel; the video stays at viewport
+// size, so those extra pixels become supersampling — crisper text at the same
+// resolution. Do NOT enlarge recordVideo.size to match: Playwright only ever
+// scales a frame DOWN to fit the requested size, so asking for more than the
+// viewport pins the page in the top-left corner and pads the rest.
+// --wait adds settle time before capture (slow/animated pages); --click
+// dismisses cookie/subscribe overlays by visible text (comma-separated
+// candidates, misses ignored). Both happen before the trim point, so neither
+// shows up in the output.
 import { chromium } from "playwright";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,11 +32,14 @@ function parseArgs(argv) {
     url: null,
     out: null,
     width: 1280,
-    height: 800,
+    height: 720,
     step: 700,
     hold: 1200,
     maxSlides: 60,
     headless: false,
+    dpr: 1,
+    wait: 0,
+    click: null,
   };
   for (const arg of argv) {
     if (!arg.startsWith("--")) {
@@ -35,6 +54,9 @@ function parseArgs(argv) {
     else if (key === "hold") args.hold = Number(val);
     else if (key === "max-slides") args.maxSlides = Number(val);
     else if (key === "headless") args.headless = true;
+    else if (key === "dpr") args.dpr = Number(val);
+    else if (key === "wait") args.wait = Number(val);
+    else if (key === "click") args.click = val;
   }
   return args;
 }
@@ -52,7 +74,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.url) {
     console.error(
-      "Usage: node record.mjs <url> [--out=out.mp4] [--width=1280] [--height=800] [--step=700] [--hold=1200] [--max-slides=60] [--headless]",
+      "Usage: node record.mjs <url> [--out=out.mp4] [--width=1280] [--height=720] [--step=700] [--hold=1200] [--max-slides=60] [--headless] [--dpr=2] [--wait=3000] [--click=\"關閉,我知道了\"]",
     );
     process.exit(1);
   }
@@ -61,6 +83,7 @@ async function main() {
   const browser = await chromium.launch({ headless: args.headless });
   const context = await browser.newContext({
     viewport: { width: args.width, height: args.height },
+    deviceScaleFactor: args.dpr,
     recordVideo: {
       dir: videoDir,
       size: { width: args.width, height: args.height },
@@ -71,6 +94,16 @@ async function main() {
 
   console.error(`Loading ${args.url} ...`);
   await page.goto(args.url, { waitUntil: "load", timeout: 60000 });
+  if (args.wait) await page.waitForTimeout(args.wait);
+  for (const text of args.click ? args.click.split(",") : []) {
+    try {
+      await page.locator(`text=${text.trim()}`).first().click({ timeout: 3000 });
+      console.error(`clicked: ${text}`);
+      await page.waitForTimeout(600);
+    } catch {
+      console.error(`click skipped (not found): ${text}`);
+    }
+  }
 
   // seconds of blank/loading footage at the front of the recording to trim —
   // measured right as the page becomes ready, before the first slide's hold
