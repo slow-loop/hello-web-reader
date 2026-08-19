@@ -606,6 +606,11 @@ async def transcribe_youtube(url: str, vocabulary_terms: list[str] | None = None
             "no_warnings": True,
             "noprogress": True,
             "cookiefile": _cookiefile_path(),
+            # Other clients (android_vr, tv_simply, mweb, ios) now require a GVS
+            # PO Token for the actual media URL and 403 without one; web_embedded
+            # is the one client observed to still serve audio formats token-free
+            # (2026-08-19).
+            "extractor_args": {"youtube": {"player_client": ["web_embedded"]}},
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
