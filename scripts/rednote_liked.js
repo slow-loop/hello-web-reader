@@ -537,8 +537,17 @@ async function fetchOne(entry, commentScrolls) {
     }
   }
 
+  // A note with no media at all is almost always a failed fetch, not a real
+  // text-only post — and it is invisible afterwards, because the folder still
+  // has note.json and note.md and reads as "already fetched". Six notes in the
+  // pool sat broken this way until an audit caught them. Say so out loud.
+  if (media.length === 0) {
+    log(`WARN [${entry.id}] fetched but saved 0 media files — likely incomplete, re-run with --force`);
+  }
+
   fs.writeFileSync(path.join(noteDir, 'note.md'), generateMarkdown(entry, detail, media));
-  return { noteDir, media, comments: detail?.comments?.list?.length || 0 };
+  const bytes = media.reduce((sum, name) => sum + fs.statSync(path.join(noteDir, name)).size, 0);
+  return { noteDir, media, bytes, comments: detail?.comments?.list?.length || 0 };
 }
 
 function clearMedia(noteDir, id) {
@@ -587,7 +596,8 @@ async function cmdFetch(ids, force, commentScrollsRaw) {
       const result = await fetchOne(entry, commentScrolls);
       process.stdout.write(
         `OK ${entry.id} → ${path.relative(process.cwd(), result.noteDir)}/`
-        + ` (media=${result.media.length} comments=${result.comments})\n`,
+        + ` (media=${result.media.length} ${(result.bytes / 1048576).toFixed(1)}MB`
+        + ` comments=${result.comments})\n`,
       );
       // Pause between notes only — a single-note run never sleeps.
       if (index === queue.length - 1) continue;
