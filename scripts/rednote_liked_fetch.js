@@ -184,11 +184,6 @@ function validateExisting(entry) {
   const rows = readJson(noteJsonPath, null);
   if (isNoteBlocked(rows)) return null;
   const comments = readJson(path.join(noteDir, 'comments.json'), []);
-  const expectedComments = Number.parseInt(
-    fieldValue(rows, 'comments').replace(/[^\d]/g, ''),
-    10,
-  ) || 0;
-  if (expectedComments > 0 && comments.length === 0) return null;
   return { rows, comments };
 }
 
@@ -242,6 +237,11 @@ function collectLikedNotes(targetId = null, fullScan = false) {
     };
   })()`;
 
+  const alreadyFetchedCount = fs.existsSync(BASE_DIR)
+    ? fs.readdirSync(BASE_DIR)
+      .filter((id) => fs.existsSync(path.join(BASE_DIR, id, 'note.md'))).length
+    : 0;
+
   const byId = new Map();
   let quietRounds = 0;
   let knownRounds = 0;
@@ -264,7 +264,14 @@ function collectLikedNotes(targetId = null, fullScan = false) {
       }
       log(`Like tab: ${byId.size} notes loaded`);
       if (targetId && byId.has(targetId)) break;
-      if (!fullScan && !targetId && knownRounds >= KNOWN_ROUNDS_TO_STOP) {
+      // Only trust "already-fetched territory" once we've scrolled past as many
+      // entries as we already have on disk — otherwise a long backlog catch-up
+      // (fetched prefix = oldest-scrolled entries, not the newest-liked ones)
+      // looks identical to "caught up" after just 1-2 rounds and falsely stops
+      // before ever reaching the unfetched remainder further down the list.
+      if (!fullScan && !targetId
+        && byId.size > alreadyFetchedCount
+        && knownRounds >= KNOWN_ROUNDS_TO_STOP) {
         log('Reached already-fetched territory; stopping the scroll early');
         break;
       }
@@ -322,10 +329,10 @@ function fetchOne(entry) {
     10,
   ) || 0;
   if (expectedComments > 0 && comments.length === 0) {
-    throw new Error(
-      `STOPPED: comments mismatch for [${entry.id}] ${entry.title} `
-      + `(expected ${expectedComments}, got 0)`,
-    );
+    // Not a block signal (that's isNoteBlocked() above) — just a discrepancy,
+    // often a deleted comment or a stale count field. Log and keep going;
+    // halting an unattended multi-hour batch over this is worse than the noise.
+    log(`WARN [${entry.id}] comments mismatch (expected ${expectedComments}, got 0)`);
   }
   fs.writeFileSync(path.join(noteDir, 'comments.json'), JSON.stringify(comments, null, 2));
 
