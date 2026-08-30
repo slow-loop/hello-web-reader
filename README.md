@@ -201,6 +201,19 @@ Standalone scripts in [`scripts/`](scripts/), not wired into the `web-reader` CL
 | `transcribe_local_audio.py` | Batch-transcribe local audio files via the ASR + LLM polish pipeline |
 | `split_audio_on_silence.py` | Split an audio file into chunks near silence boundaries (used internally by `transcribe_local_audio.py` for long/large files) |
 | `export_claude_conversations.py` | Export local Claude Code / Claude Desktop Cowork conversation history to plain files (macOS only) |
+| `rednote_liked.js` | Index and fetch the signed-in rednote.com account's Like tab (needs OpenCLI + a logged-in controlled Chrome) |
+
+Indexing and fetching are separate on purpose: building the index costs zero
+per-note requests, so it can cover everything and run often; fetching a note
+costs one page load, so it runs only on the notes actually picked for a video.
+Pool lands in `output/rednote/liked/<note-id>/`. Full notes in the script header.
+
+```bash
+node scripts/rednote_liked.js                          # print the index (default, offline)
+node scripts/rednote_liked.js --index                  # refresh it (3 scrolls, ~40 notes)
+node scripts/rednote_liked.js --index --scrolls all    # full sweep
+node scripts/rednote_liked.js --fetch <id> [<id>...]   # already-fetched ids are skipped
+```
 
 ```bash
 .venv/bin/python scripts/transcribe_local_audio.py output/example/audio --out output/example/transcripts --skip-existing
