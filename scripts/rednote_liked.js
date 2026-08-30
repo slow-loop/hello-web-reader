@@ -52,11 +52,14 @@
  *   node scripts/rednote_liked.js --fetch <id> [<id>...]
  *   node scripts/rednote_liked.js --fetch <id> --force
  *   node scripts/rednote_liked.js --fetch <id> --comment-scrolls 2
+ *   node scripts/rednote_liked.js --fetch <id> --video-low   # smallest rendition
  */
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { parseArgs } = require('node:util');
+const { Readable } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 
 const OPENCLI_BIN = path.join(
   process.env.HOME,
@@ -386,23 +389,77 @@ function extensionFor(contentType, url) {
   return match ? `.${match[1].toLowerCase().replace('jpeg', 'jpg')}` : '.jpg';
 }
 
-async function downloadImages(images, noteDir, noteId) {
+// The CDN is a different origin from rednote.com, so the site session cookie is
+// not what gates it — the Referer is.
+const CDN_HEADERS = {
+  Referer: `https://${WEB_HOST}/`,
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+    + ' (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+};
+
+async function cdnGet(url, timeoutMs = 120000) {
+  const res = await fetch(url, { headers: CDN_HEADERS, signal: AbortSignal.timeout(timeoutMs) });
+  if (!res.ok) throw new Error(`${url.slice(0, 60)}… responded ${res.status}`);
+  return res;
+}
+
+/**
+ * Choose which rendition of a video note to download.
+ *
+ * note.video.media.stream is keyed by codec (EF4/EF5/…), each holding the
+ * playback renditions the app itself streams — around 8-14MB for a two-minute
+ * clip. What must NOT be used is video.consumer.originVideoKey: that is the
+ * creator's original upload. OpenCLI's `rednote download` falls back to exactly
+ * that key (it looks for a `h264` stream bucket that current pages no longer
+ * use), and pulled 537MB for a clip whose real streams were 7.7-13.8MB.
+ */
+function pickVideoStream(note, preferLow) {
+  const stream = note?.video?.media?.stream;
+  if (!stream || typeof stream !== 'object') return null;
+  const all = Object.values(stream).flat().filter((item) => item && item.masterUrl);
+  if (all.length === 0) return null;
+  if (preferLow) return all.slice().sort((a, b) => (a.size || 0) - (b.size || 0))[0];
+  return all.slice().sort((a, b) => (
+    (b.width * b.height) - (a.width * a.height) || (a.size || 0) - (b.size || 0)
+  ))[0];
+}
+
+async function downloadStream(urls, destPath) {
+  let lastError = null;
+  for (const url of urls) {
+    try {
+      const res = await cdnGet(url);
+      await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(destPath));
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('no usable stream URL');
+}
+
+async function downloadMedia(note, noteDir, noteId, preferLow) {
   const saved = [];
-  for (let i = 0; i < images.length; i += 1) {
-    const url = pickImageUrl(images[i]);
-    if (!url) throw new Error(`image ${i + 1} has no usable URL`);
-    const res = await fetch(url, {
-      headers: {
-        // The CDN is a different origin from rednote.com, so the site session
-        // cookie is not what gates it — the Referer is.
-        Referer: `https://${WEB_HOST}/`,
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-          + ' (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      },
-      signal: AbortSignal.timeout(60000),
-    });
-    if (!res.ok) throw new Error(`image ${i + 1} responded ${res.status}`);
-    const fileName = `${noteId}_${i + 1}${extensionFor(res.headers.get('content-type'), url)}`;
+  let index = 0;
+
+  if (toText(note.type) === 'video') {
+    const stream = pickVideoStream(note, preferLow);
+    if (!stream) throw new Error('no playback stream in the store');
+    index += 1;
+    const fileName = `${noteId}_${index}.mp4`;
+    log(`  video ${stream.width}x${stream.height} ~${((stream.size || 0) / 1048576).toFixed(1)}MB`);
+    await downloadStream([stream.masterUrl, ...(stream.backupUrls || [])].filter(Boolean),
+      path.join(noteDir, fileName));
+    saved.push(fileName);
+  }
+
+  // Video notes carry their cover in imageList too, so this runs for both kinds.
+  for (const image of note.imageList || []) {
+    const url = pickImageUrl(image);
+    if (!url) throw new Error(`image ${index + 1} has no usable URL`);
+    const res = await cdnGet(url, 60000);
+    index += 1;
+    const fileName = `${noteId}_${index}${extensionFor(res.headers.get('content-type'), url)}`;
     fs.writeFileSync(path.join(noteDir, fileName), Buffer.from(await res.arrayBuffer()));
     saved.push(fileName);
   }
@@ -487,7 +544,7 @@ ${renderComments(detail?.comments?.list)}
 `;
 }
 
-async function fetchOne(entry, commentScrolls) {
+async function fetchOne(entry, commentScrolls, videoLow) {
   const noteDir = path.join(BASE_DIR, entry.id);
   fs.mkdirSync(noteDir, { recursive: true });
 
@@ -521,20 +578,15 @@ async function fetchOne(entry, commentScrolls) {
   fs.writeFileSync(path.join(noteDir, 'note.json'), JSON.stringify(detail, null, 2));
 
   const note = detail.note || {};
-  const images = Array.isArray(note.imageList) ? note.imageList : [];
   let media;
-  if (toText(note.type) === 'video') {
-    // Video URL extraction has enough fallbacks in OpenCLI that reimplementing
-    // it would be the fragile part of this script. 15 of 686 files in the pool
-    // are video, so the extra page load is affordable here.
+  try {
+    media = await downloadMedia(note, noteDir, entry.id, videoLow);
+  } catch (error) {
+    // `rednote download` reloads the page and scrapes it, and for video it can
+    // land on the origin upload instead of a stream — so it is the last resort,
+    // not the default path.
+    log(`WARN [${entry.id}] direct download failed (${error.message}); falling back to rednote download`);
     media = downloadViaOpencli(entry, noteDir);
-  } else {
-    try {
-      media = await downloadImages(images, noteDir, entry.id);
-    } catch (error) {
-      log(`WARN [${entry.id}] direct image download failed (${error.message}); falling back to rednote download`);
-      media = downloadViaOpencli(entry, noteDir);
-    }
   }
 
   // A note with no media at all is almost always a failed fetch, not a real
@@ -558,7 +610,7 @@ function clearMedia(noteDir, id) {
   }
 }
 
-async function cmdFetch(ids, force, commentScrollsRaw) {
+async function cmdFetch(ids, force, commentScrollsRaw, videoLow) {
   const commentScrolls = Number.parseInt(commentScrollsRaw, 10);
   if (!Number.isInteger(commentScrolls) || commentScrolls < 0) {
     throw new Error(`--comment-scrolls takes a non-negative integer, got ${JSON.stringify(commentScrollsRaw)}`);
@@ -593,7 +645,7 @@ async function cmdFetch(ids, force, commentScrollsRaw) {
     for (let index = 0; index < queue.length; index += 1) {
       const entry = queue[index];
       log(`Fetching [${entry.id}]`);
-      const result = await fetchOne(entry, commentScrolls);
+      const result = await fetchOne(entry, commentScrolls, videoLow);
       process.stdout.write(
         `OK ${entry.id} → ${path.relative(process.cwd(), result.noteDir)}/`
         + ` (media=${result.media.length} ${(result.bytes / 1048576).toFixed(1)}MB`
@@ -624,6 +676,7 @@ async function main() {
       fetch: { type: 'boolean', default: false },
       force: { type: 'boolean', default: false },
       'comment-scrolls': { type: 'string', default: '0' },
+      'video-low': { type: 'boolean', default: false },
     },
     allowPositionals: true,
   });
@@ -641,7 +694,7 @@ async function main() {
   }
   if (values.fetch) {
     if (positionals.length === 0) throw new Error('--fetch needs at least one note id');
-    await cmdFetch(positionals, values.force, values['comment-scrolls']);
+    await cmdFetch(positionals, values.force, values['comment-scrolls'], values['video-low']);
     return;
   }
   cmdList(values['list-limit'], values['list-all']);
