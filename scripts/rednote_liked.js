@@ -477,11 +477,18 @@ function flattenMediaIfNested(noteDir, id) {
   fs.rmdirSync(nested);
 }
 
+// Sort by the numeric `_<n>.` suffix, not the file name string — a plain
+// string sort orders `_10` before `_2`, scrambling the reading order that
+// generateMarkdown's "图N" labels rely on.
 function listMedia(noteDir) {
   if (!fs.existsSync(noteDir)) return [];
   return fs.readdirSync(noteDir)
     .filter((fileName) => /\.(jpe?g|png|webp|gif|mp4|mov)$/i.test(fileName))
-    .sort();
+    .sort((a, b) => {
+      const numA = Number.parseInt(/_(\d+)\.[^.]+$/.exec(a)?.[1] ?? '0', 10);
+      const numB = Number.parseInt(/_(\d+)\.[^.]+$/.exec(b)?.[1] ?? '0', 10);
+      return numA - numB || a.localeCompare(b);
+    });
 }
 
 function downloadViaOpencli(entry, noteDir) {
