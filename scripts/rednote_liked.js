@@ -16,9 +16,11 @@
  * page's own store — __INITIAL_STATE__.note.noteDetailMap[<id>] — carries the
  * body, the first page of comments AND every image URL in one load, with the
  * publish time, share count, structured tags, image dimensions and comment
- * timestamps that the flattened output drops. So we drive the browser
- * ourselves and keep the raw object. `rednote download` is still used for
- * video notes: its video-URL extraction has fallbacks worth not reimplementing.
+ * timestamps that the flattened output drops — and, for video notes, the
+ * playback stream list. So we drive the browser ourselves and keep the raw
+ * object. `rednote download` is a last-resort fallback only: it reloads and
+ * scrapes the page, and for video it lands on the creator's original upload
+ * (537MB measured, where the real streams were 7.7-13.8MB).
  *
  * TWO URL LIFETIMES — do not confuse them
  * - A note URL's xsec_token is long-lived: a token minted 54 days earlier still
