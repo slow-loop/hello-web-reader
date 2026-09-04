@@ -17,11 +17,12 @@ class CacheConfig(BaseModel):
 
 
 class SourceConfig(BaseModel):
-    """A single source in the feeds config."""
+    """A single source in the watchlist config."""
 
     name: str
     reader: str  # web, rss, reddit, youtube, email, json, substack
-    id: Optional[str] = None  # stable source id; names the archive folder
+    source_id: str  # stable source id; names the archive folder. Required:
+    # deriving it from `name` would silently move the archive on every rename.
     url: Optional[str] = None
     params: dict[str, Any] = Field(default_factory=dict)
     cache: CacheConfig = Field(default_factory=CacheConfig)
@@ -35,8 +36,8 @@ class DefaultsConfig(BaseModel):
     cache: Optional[CacheConfig] = None
 
 
-class FeedConfig(BaseModel):
-    """Top-level feeds.yaml structure."""
+class WatchlistConfig(BaseModel):
+    """Top-level watchlist.yaml structure."""
 
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     sources: list[SourceConfig] = Field(default_factory=list)
@@ -53,8 +54,8 @@ def _expand_env_vars(obj: Any) -> Any:
     return obj
 
 
-def load_config(path: str | Path) -> FeedConfig:
-    """Load a feeds.yaml file, expanding ${ENV_VAR} placeholders."""
+def load_config(path: str | Path) -> WatchlistConfig:
+    """Load a watchlist.yaml file, expanding ${ENV_VAR} placeholders."""
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Config not found: {p}")
@@ -69,9 +70,9 @@ def load_config(path: str | Path) -> FeedConfig:
     raw = _expand_env_vars(raw)
 
     if raw is None:
-        return FeedConfig()
+        return WatchlistConfig()
 
-    config = FeedConfig.model_validate(raw)
+    config = WatchlistConfig.model_validate(raw)
 
     # Merge defaults into each source
     if config.defaults.params or config.defaults.cache:

@@ -8,13 +8,15 @@ from web_reader.config import CacheConfig, load_config
 def test_load_basic_config():
     yaml_content = """
 sources:
-  - name: test-rss
+  - source_id: test-rss
+    name: test-rss
     reader: rss
     url: "https://example.com/feed"
     tags: [tech]
     cache:
       ttl: 3600
-  - name: test-reddit
+  - source_id: test-reddit
+    name: test-reddit
     reader: reddit
     tags: [finance, reddit]
     params:
@@ -41,7 +43,8 @@ sources:
 def test_source_tags_default_empty():
     yaml_content = """
 sources:
-  - name: no-tags
+  - source_id: no-tags
+    name: no-tags
     reader: web
     url: "https://example.com"
 """
@@ -61,7 +64,8 @@ def test_cache_config_default():
 def test_load_config_with_cache_ttl():
     yaml_content = """
 sources:
-  - name: morning-email
+  - source_id: morning-email
+    name: morning-email
     reader: email
     tags: [email]
     params:

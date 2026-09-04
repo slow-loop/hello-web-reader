@@ -1,12 +1,12 @@
 """
-Feed runner — executes a FeedConfig, dispatching to the right readers.
+Watchlist runner — executes a WatchlistConfig, dispatching to the right readers.
 """
 
 import asyncio
 import logging
 from typing import Optional
 
-from .config import FeedConfig, SourceConfig, load_config
+from .config import WatchlistConfig, SourceConfig, load_config
 from .models import ReadResult
 from .cache import ReadCache
 
@@ -252,7 +252,7 @@ async def run_config(
     cache: Optional[ReadCache] = None,
 ) -> dict[str, list[ReadResult]]:
     """
-    Run a feeds.yaml config and return results grouped by source name.
+    Run a watchlist.yaml config and return results grouped by source name.
 
     Args:
         config_path: Path to the YAML config file.

@@ -38,7 +38,7 @@ def _build_info() -> dict[str, object]:
         "notes": [
             "This MCP server wraps the Python API directly.",
             "Use read_url for a single URL or pseudo-URL such as gnews://...",
-            "Use read_config for YAML feed configs with optional tag filtering.",
+            "Use read_config for YAML watchlist configs with optional tag filtering.",
         ],
     }
 
@@ -47,7 +47,7 @@ def build_server():
     mcp = FastMCP(
         "web-reader",
         instructions=(
-            "Use these tools to read URLs or feed configs with the web-reader Python API. "
+            "Use these tools to read URLs or watchlist configs with the web-reader Python API. "
             "Prefer read_url for a single URL and read_config for YAML source bundles."
         ),
     )

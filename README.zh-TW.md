@@ -23,7 +23,7 @@ uv sync
 複製設定範本：
 
 ```bash
-cp feeds.example.yaml feeds.yaml   # 自訂來源
+cp watchlist.example.yaml watchlist.yaml   # 自訂來源
 # .env 填入：YOUTUBE_API_KEY、YAHOO_MAIL_USERNAME、YAHOO_MAIL_PASSWORD
 ```
 
@@ -82,7 +82,7 @@ uv run web-reader channel @example --subtitles --transcribe
 
 ### Watchlist 增量抓取（fetch）
 
-常態性的採集入口：讀一份 watchlist（feeds.yaml 格式），把窗口內的新內容
+常態性的採集入口：讀一份 watchlist 設定檔，把窗口內的新內容
 抓進 `output/` archive，存成帶 frontmatter 的 markdown（佈局契約在
 `web_reader.store`）。已入檔的項目永不重抓，窗口重疊是免費的。
 
@@ -104,12 +104,12 @@ watchlist 路徑由呼叫端明確傳入，任何 repo 都能指定自己的清�
 ### YAML 設定檔（批次抓取）
 
 ```bash
-uv run web-reader feeds.yaml
-uv run web-reader feeds.yaml --tags=finance
-uv run web-reader feeds.yaml --format=md --no-cache
+uv run web-reader watchlist.yaml
+uv run web-reader watchlist.yaml --tags=finance
+uv run web-reader watchlist.yaml --format=md --no-cache
 ```
 
-完整設定範本請參考 [`feeds.example.yaml`](feeds.example.yaml)。
+完整設定範本請參考 [`watchlist.example.yaml`](watchlist.example.yaml)。
 
 支援的 `reader` 值：
 

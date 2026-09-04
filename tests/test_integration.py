@@ -358,29 +358,33 @@ async def test_read_urls_preserves_order_and_detects_types(local_server: str):
 
 @pytest.mark.asyncio
 async def test_run_config_with_tags_and_cache(local_server: str, tmp_path: Path):
-    config_path = tmp_path / "feeds.yaml"
+    config_path = tmp_path / "watchlist.yaml"
     config_path.write_text(
         f"""\
 sources:
-  - name: local-web
+  - source_id: local-web
+    name: local-web
     reader: web
     url: "{local_server}/article"
     tags: [web, smoke]
     cache:
       ttl: 3600
-  - name: local-rss
+  - source_id: local-rss
+    name: local-rss
     reader: rss
     url: "{local_server}/feed"
     tags: [rss, smoke]
     cache:
       ttl: 3600
-  - name: local-json
+  - source_id: local-json
+    name: local-json
     reader: json
     url: "{local_server}/api/data.json"
     tags: [json]
     cache:
       ttl: 3600
-  - name: local-reddit
+  - source_id: local-reddit
+    name: local-reddit
     reader: reddit
     url: "{local_server}/r/investing/hot"
     tags: [reddit]
@@ -415,7 +419,8 @@ async def test_run_config_rss_no_cache_stays_uncached_and_respects_delay(
     config_path.write_text(
         f"""\
 sources:
-  - name: local-rss
+  - source_id: local-rss
+    name: local-rss
     reader: rss
     url: "{local_server}/feed"
     params:
@@ -455,17 +460,19 @@ def test_cli_reads_single_url_as_json(local_server: str, monkeypatch: pytest.Mon
 
 
 def test_cli_reads_config_as_markdown(local_server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys):
-    config_path = tmp_path / "cli-feeds.yaml"
+    config_path = tmp_path / "cli-watchlist.yaml"
     config_path.write_text(
         f"""\
 sources:
-  - name: cli-web
+  - source_id: cli-web
+    name: cli-web
     reader: web
     url: "{local_server}/article"
     tags: [web]
     cache:
       ttl: 3600
-  - name: cli-rss
+  - source_id: cli-rss
+    name: cli-rss
     reader: rss
     url: "{local_server}/feed"
     tags: [rss]

@@ -220,15 +220,13 @@ data/bars
 data/chips
 data/briefings
 
-# Personal feeds config (use feeds.example.yaml as template)
-feeds.yaml
 # Generated output
 output/
 tmp/
 www.*.com_cookies.txt
 .DS_Store
 
-# Personal watchlists (same policy as feeds.yaml)
+# Personal watchlist config (use watchlist.example.yaml as template)
 watchlist.yaml
 
 # playwright/ subfolder (Node.js, independent of the Python package)

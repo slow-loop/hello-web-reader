@@ -6,8 +6,8 @@ Usage:
     uv run web-reader config <file> [OPTIONS]
 
 Examples:
-    uv run web-reader config feeds.yaml
-    uv run web-reader config feeds.yaml --tags finance,tech
+    uv run web-reader config watchlist.yaml
+    uv run web-reader config watchlist.yaml --tags finance,tech
     uv run web-reader read "https://hnrss.org/frontpage"
     uv run web-reader read "https://www.youtube.com/watch?v=i8OI8CNdZgU" --lang en
 """
@@ -449,7 +449,7 @@ def config(
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
 ):
     """
-    Read multiple feeds from a YAML config file.
+    Read multiple sources from a watchlist YAML config file.
     """
     _setup_logging(verbose)
     tags_list = [t.strip() for t in tags.split(",")] if tags else None
@@ -505,7 +505,7 @@ def channel(
 
 @app.command()
 def fetch(
-    watchlist: str = typer.Argument(..., help="Path to the watchlist config (feeds.yaml format)."),
+    watchlist: str = typer.Argument(..., help="Path to the watchlist config."),
     since: str = typer.Option("-24h", help="Window start: -24h / -7d / YYYY-MM-DD."),
     source: Optional[str] = typer.Option(None, help="Only fetch this source id."),
     limit: Optional[int] = typer.Option(None, help="Override per-source cap on new expensive fetches (ASR/yt-dlp)."),

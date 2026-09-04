@@ -1,5 +1,6 @@
 sources:
-  - name: hn-frontpage
+  - source_id: hn-frontpage
+    name: Hacker News front page
     reader: rss
     url: "https://hnrss.org/frontpage?count=3"
     cache:

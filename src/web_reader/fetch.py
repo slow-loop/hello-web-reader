@@ -1,6 +1,6 @@
 """`web-reader fetch` — incremental watchlist fetch into the output/ store.
 
-Reads a watchlist (feeds.yaml-format config), fetches whatever is new since
+Reads a watchlist config, fetches whatever is new since
 the window start, and archives it through `web_reader.store`. This is the
 recurring acquisition step of the pipeline: downstream consumers never fetch
 from the network themselves — they read the store this command maintains.
@@ -25,7 +25,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .store import Store, safe_name
+from .store import Store
 from .config import SourceConfig, load_config
 
 # Measured: SenseVoice runs at ~7.4x realtime. Used for --dry-run estimates.
@@ -64,10 +64,6 @@ def _iso_duration_seconds(s: str) -> int:
     return h * 3600 + mi * 60 + se
 
 
-def _source_id(source: SourceConfig) -> str:
-    return source.id or safe_name(source.name) or "unnamed"
-
-
 class SourceResult:
     def __init__(self, source_id: str, reader: str):
         self.source_id = source_id
@@ -80,7 +76,7 @@ class SourceResult:
 async def _fetch_rss(source: SourceConfig, store: Store, since: datetime, dry_run: bool) -> SourceResult:
     from .readers.rss import read_rss_entries
 
-    res = SourceResult(_source_id(source), source.reader)
+    res = SourceResult(source.source_id, source.reader)
     # web-reader's RSS filter compares against feedparser's naive-UTC datetimes.
     since_naive = since.replace(tzinfo=None).isoformat()
     results = await read_rss_entries(source.url, published_after=since_naive)
@@ -106,7 +102,7 @@ async def _fetch_podcast(
 ) -> SourceResult:
     from .readers.rss_podcast import list_episodes, read_episode
 
-    res = SourceResult(_source_id(source), source.reader)
+    res = SourceResult(source.source_id, source.reader)
     limit = limit_override if limit_override is not None else int(source.params.get("limit", DEFAULT_PODCAST_LIMIT))
 
     todo = []
@@ -159,7 +155,7 @@ async def _fetch_youtube(
         fetch_video_details, list_channel_videos, probe_captions, read_youtube,
     )
 
-    res = SourceResult(_source_id(source), source.reader)
+    res = SourceResult(source.source_id, source.reader)
     channel_id = source.params.get("channel_id") or source.params.get("handle")
     if not channel_id:
         raise ValueError("youtube source missing params.channel_id")
@@ -289,13 +285,13 @@ async def fetch_watchlist(
 
     sources = config.sources
     if only_source:
-        sources = [s for s in sources if _source_id(s) == only_source]
+        sources = [s for s in sources if s.source_id == only_source]
         if not sources:
             raise ValueError(f"source id not found in watchlist: {only_source}")
 
     results: list[SourceResult] = []
     for source in sources:
-        sid = _source_id(source)
+        sid = source.source_id
         fetcher = _FETCHERS.get(source.reader)
         if fetcher is None:
             print(f"  - {sid}: reader {source.reader!r} not supported by fetch, skipping")

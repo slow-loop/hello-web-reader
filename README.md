@@ -29,7 +29,7 @@ missing episodes look like a quiet day rather than a broken install.
 Copy the env template and fill in your keys:
 
 ```bash
-cp feeds.example.yaml feeds.yaml   # customise your sources
+cp watchlist.example.yaml watchlist.yaml   # customise your sources
 # Add to .env: YOUTUBE_API_KEY, YAHOO_MAIL_USERNAME, YAHOO_MAIL_PASSWORD
 ```
 
@@ -109,7 +109,7 @@ never moved by `--out`. Re-running skips what is already on disk.
 
 ### Watchlist fetch (incremental archive)
 
-The recurring acquisition step: read a watchlist (feeds.yaml format), fetch
+The recurring acquisition step: read a watchlist config, fetch
 whatever is new in the window, and archive it under `output/` as markdown with
 frontmatter (layout contract in `web_reader.store`). Already-archived items
 are never re-fetched, so overlapping windows are free.
@@ -134,12 +134,12 @@ prices the batch (worst-case ASR hours) without downloading anything.
 ### YAML feed config (batch fetch)
 
 ```bash
-uv run web-reader feeds.yaml
-uv run web-reader feeds.yaml --tags=finance
-uv run web-reader feeds.yaml --format=md --no-cache
+uv run web-reader watchlist.yaml
+uv run web-reader watchlist.yaml --tags=finance
+uv run web-reader watchlist.yaml --format=md --no-cache
 ```
 
-See [`feeds.example.yaml`](feeds.example.yaml) for a full config template.
+See [`watchlist.example.yaml`](watchlist.example.yaml) for a full config template.
 
 Supported `reader` values:
 

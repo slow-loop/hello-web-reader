@@ -1,18 +1,24 @@
-# Example feeds config for web-reader
+# Example watchlist config for web-reader
 # Usage:
-#   uv run web-reader feeds.yaml
-#   uv run web-reader feeds.yaml --tags=finance
-#   uv run web-reader feeds.yaml --tags=finance,tech --format=md
+#   uv run web-reader watchlist.yaml
+#   uv run web-reader watchlist.yaml --tags=finance
+#   uv run web-reader watchlist.yaml --tags=finance,tech --format=md
+#
+# source_id is required and names the archive folder. Keep it stable forever:
+# renaming it orphans everything already fetched under the old id. `name` is
+# the human label and is safe to change at any time.
 
 sources:
-  - name: hn-frontpage
+  - source_id: hn-frontpage
+    name: Hacker News front page
     reader: rss
     url: "https://hnrss.org/frontpage"
     tags: [tech]
     cache:
       ttl: 3600
 
-  - name: r-investing
+  - source_id: r-investing
+    name: r/investing
     reader: reddit
     tags: [finance, reddit]
     params:
@@ -22,7 +28,8 @@ sources:
     cache:
       ttl: 1800
 
-  - name: r-stocks-top
+  - source_id: r-stocks-top
+    name: r/stocks (top of week)
     reader: reddit
     tags: [finance, reddit]
     params:
@@ -33,7 +40,8 @@ sources:
     cache:
       ttl: 3600
 
-  - name: substack-transcript
+  - source_id: substack-transcript
+    name: The Transcript
     reader: substack
     tags: [finance]
     params:
@@ -42,7 +50,8 @@ sources:
     cache:
       ttl: 7200
 
-  - name: yt-ted
+  - source_id: yt-ted
+    name: TED
     reader: youtube_channel
     tags: [youtube]
     params:
@@ -53,7 +62,8 @@ sources:
 
   # Apple Podcasts — Mac only, episodes must be downloaded locally
   # Transcribes via Groq Whisper (requires GROQ_API_KEY in .env)
-  - name: podcast-backfill
+  - source_id: podcast-backfill
+    name: The Daily
     reader: apple_podcast
     tags: [podcast, transcript]
     params:
@@ -67,7 +77,8 @@ sources:
   # Podcast RSS — downloads each episode's audio and transcribes it locally
   # (raw SenseVoice ASR, no OpenCC/LLM refinement). Works with any standard
   # podcast feed (SoundOn, Firstory, SoundCloud, …). Dedup key: feed <guid>.
-  - name: podcast-gooaye
+  - source_id: podcast-gooaye
+    name: 股癌 Gooaye
     reader: rss_podcast
     tags: [podcast, transcript]
     url: "https://feeds.soundon.fm/podcasts/954689a5-3096-43a4-a80b-7810b219cef3.xml"
@@ -77,7 +88,8 @@ sources:
       ttl: 86400
 
   # Yahoo Mail — credentials via .env (see .env.example)
-  - name: yahoo-email-inbox
+  - source_id: yahoo-email-inbox
+    name: Yahoo Mail inbox
     reader: email
     tags: [email]
     params:

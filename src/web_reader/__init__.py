@@ -17,7 +17,7 @@ Usage:
 
     # CLI
     uv run web-reader fetch "https://example.com"
-    uv run web-reader fetch feeds.yaml --only=reddit --format=md
+    uv run web-reader fetch watchlist.yaml --only=reddit --format=md
 """
 
 import asyncio
@@ -30,7 +30,7 @@ from dotenv import load_dotenv
 from .models import ReadResult, EmailRequest, RssEntry, SourceType
 from .cache import ReadCache, ReadRecord
 from ._detect import detect_source_type
-from .config import FeedConfig, SourceConfig, CacheConfig, load_config
+from .config import WatchlistConfig, SourceConfig, CacheConfig, load_config
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ __all__ = [
     "RssEntry",
     "SourceType",
     # Config
-    "FeedConfig",
+    "WatchlistConfig",
     "SourceConfig",
     "CacheConfig",
     "load_config",
