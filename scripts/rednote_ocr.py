@@ -8,7 +8,7 @@ images back into text so the rest of the pipeline (clippings, scripting)
 has something to work with.
 
 Images are ordered by the numeric suffix in the filename
-(`<note-id>_<n>.<ext>`), not by directory listing order — `rednote_liked.js`'s
+(`<note-id>_<n>.<ext>`), not by directory listing order — `opencli_rednote_liked.js`'s
 fallback download path names files off an alphabetical sort, so `_10` sorts
 before `_2` there. The numeric suffix is always the true reading order
 (assigned during `note.imageList` iteration at fetch time).

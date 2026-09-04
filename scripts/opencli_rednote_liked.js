@@ -45,16 +45,16 @@
  * - Stops the whole run on the first risk-control/login-wall signal.
  *
  * USAGE
- *   node scripts/rednote_liked.js                          # print newest 60
- *   node scripts/rednote_liked.js --list-all
- *   node scripts/rednote_liked.js --list-limit 200
- *   node scripts/rednote_liked.js --index                  # 3 scrolls, ~40 notes
- *   node scripts/rednote_liked.js --index --scrolls 5
- *   node scripts/rednote_liked.js --index --scrolls all
- *   node scripts/rednote_liked.js --fetch <id> [<id>...]
- *   node scripts/rednote_liked.js --fetch <id> --force
- *   node scripts/rednote_liked.js --fetch <id> --comment-scrolls 2
- *   node scripts/rednote_liked.js --fetch <id> --video-low   # smallest rendition
+ *   node scripts/opencli_rednote_liked.js                          # print newest 60
+ *   node scripts/opencli_rednote_liked.js --list-all
+ *   node scripts/opencli_rednote_liked.js --list-limit 200
+ *   node scripts/opencli_rednote_liked.js --index                  # 3 scrolls, ~40 notes
+ *   node scripts/opencli_rednote_liked.js --index --scrolls 5
+ *   node scripts/opencli_rednote_liked.js --index --scrolls all
+ *   node scripts/opencli_rednote_liked.js --fetch <id> [<id>...]
+ *   node scripts/opencli_rednote_liked.js --fetch <id> --force
+ *   node scripts/opencli_rednote_liked.js --fetch <id> --comment-scrolls 2
+ *   node scripts/opencli_rednote_liked.js --fetch <id> --video-low   # smallest rendition
  */
 const fs = require('fs');
 const path = require('path');
@@ -306,7 +306,7 @@ function padDisplay(text, width) {
 function cmdList(limitRaw, listAll) {
   const merged = mergeIndex();
   if (merged.size === 0) {
-    process.stdout.write('索引是空的，先跑 `node scripts/rednote_liked.js --index`\n');
+    process.stdout.write('索引是空的，先跑 `node scripts/opencli_rednote_liked.js --index`\n');
     return;
   }
   const limit = listAll ? merged.size : (limitRaw ? Number.parseInt(limitRaw, 10) : DEFAULT_LIST_LIMIT);
@@ -633,7 +633,7 @@ async function cmdFetch(ids, force, commentScrollsRaw, videoLow) {
   if (missing.length > 0) {
     throw new Error(
       `not in the index: ${missing.join(', ')}\n`
-      + 'Run `node scripts/rednote_liked.js --index` first (it mints the xsec_token these URLs need).',
+      + 'Run `node scripts/opencli_rednote_liked.js --index` first (it mints the xsec_token these URLs need).',
     );
   }
 

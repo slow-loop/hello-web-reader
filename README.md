@@ -114,8 +114,9 @@ whatever is new in the window, and archive it under `output/` as markdown with
 frontmatter (layout contract in `web_reader.store`). Already-archived items
 are never re-fetched, so overlapping windows are free.
 
-- `rss` → article full text → `output/substack/<id>/`
-- `rss_podcast` → audio download + local ASR → `output/podcast/<id>/` (audio kept in `audio/`)
+- `rss` → article full text → `output/substack/<source_id>/`
+- `substack_notes` → Substack Notes (not carried by the RSS feed) → `output/substack/<source_id>/`
+- `rss_podcast` → audio download + local ASR → `output/podcast/<source_id>/` (audio kept in `audio/`)
 - `youtube_channel` → captions, ASR fallback for caption-less videos →
   `output/youtube/<handle>/{subtitles,transcripts}/`
 
@@ -150,6 +151,7 @@ Supported `reader` values:
 | `reddit` | Subreddit or thread |
 | `youtube` | YouTube transcript |
 | `substack` | Substack newsletter |
+| `substack_notes` | A publication's Substack Notes (separate stream from its posts) |
 | `gnews` | Google News keyword search |
 | `ptt` | PTT board / search / single post |
 | `json` | JSON API endpoint |
@@ -201,7 +203,7 @@ Standalone scripts in [`scripts/`](scripts/), not wired into the `web-reader` CL
 | `transcribe_local_audio.py` | Batch-transcribe local audio files via the ASR + LLM polish pipeline |
 | `split_audio_on_silence.py` | Split an audio file into chunks near silence boundaries (used internally by `transcribe_local_audio.py` for long/large files) |
 | `export_claude_conversations.py` | Export local Claude Code / Claude Desktop Cowork conversation history to plain files (macOS only) |
-| `rednote_liked.js` | Index and fetch the signed-in rednote.com account's Like tab (needs OpenCLI + a logged-in controlled Chrome) |
+| `opencli_rednote_liked.js` | Index and fetch the signed-in rednote.com account's Like tab (needs OpenCLI + a logged-in controlled Chrome) |
 
 Indexing and fetching are separate on purpose: building the index costs zero
 per-note requests, so it can cover everything and run often; fetching a note
@@ -209,10 +211,10 @@ costs one page load, so it runs only on the notes actually picked for a video.
 Pool lands in `output/rednote/liked/<note-id>/`. Full notes in the script header.
 
 ```bash
-node scripts/rednote_liked.js                          # print the index (default, offline)
-node scripts/rednote_liked.js --index                  # refresh it (3 scrolls, ~40 notes)
-node scripts/rednote_liked.js --index --scrolls all    # full sweep
-node scripts/rednote_liked.js --fetch <id> [<id>...]   # already-fetched ids are skipped
+node scripts/opencli_rednote_liked.js                          # print the index (default, offline)
+node scripts/opencli_rednote_liked.js --index                  # refresh it (3 scrolls, ~40 notes)
+node scripts/opencli_rednote_liked.js --index --scrolls all    # full sweep
+node scripts/opencli_rednote_liked.js --fetch <id> [<id>...]   # already-fetched ids are skipped
 ```
 
 ```bash

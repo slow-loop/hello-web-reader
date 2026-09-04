@@ -20,8 +20,8 @@ captions, so they never share a folder.
 
 Files written by this module carry YAML frontmatter (url, title,
 published_at, ...). Files that predate the contract may not; read functions
-tolerate both. (All legacy layouts were migrated into the canonical one via
-scripts/migrate_youtube_transcribed.py on 2026-07-30/31.)
+tolerate both. (All legacy layouts were migrated into the canonical one on 2026-07-30/31,
+by a one-off script since retired.)
 """
 
 from __future__ import annotations
