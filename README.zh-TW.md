@@ -86,7 +86,8 @@ uv run web-reader channel @example --subtitles --transcribe
 抓進 `output/` archive，存成帶 frontmatter 的 markdown（佈局契約在
 `web_reader.store`）。已入檔的項目永不重抓，窗口重疊是免費的。
 
-- `rss` → 文章全文 → `output/substack/<id>/`
+- `rss` → 文章全文 → `output/substack/<source_id>/`
+- `substack_notes` → Substack Notes（RSS feed 不帶，要另外抓）→ `output/substack/<source_id>/`
 - `rss_podcast` → 下載音檔 + 本機 ASR → `output/podcast/<id>/`（音檔留在 `audio/`）
 - `youtube_channel` → 抓字幕，無字幕自動 ASR fallback →
   `output/youtube/<handle>/{subtitles,transcripts}/`
@@ -120,6 +121,7 @@ uv run web-reader watchlist.yaml --format=md --no-cache
 | `reddit` | Reddit 版面或討論串 |
 | `youtube` | YouTube 字幕 |
 | `substack` | Substack newsletter |
+| `substack_notes` | 某個 publication 的 Substack Notes（跟長文是兩條不同的流）|
 | `gnews` | Google News 關鍵字搜尋 |
 | `ptt` | PTT 版面 / 搜尋 / 單篇 |
 | `json` | JSON API endpoint |

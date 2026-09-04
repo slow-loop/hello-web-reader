@@ -6,11 +6,12 @@ No external substack_api dependency needed.
 """
 
 import logging
+from datetime import datetime
 from typing import Any, List, Optional
 
 import httpx
 from markdownify import markdownify as md
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..models import ReadResult
 
@@ -109,7 +110,7 @@ class ExploreAttachment(BaseModel):
 
 
 class ExploreComment(BaseModel):
-    """A Substack Note from the explore API."""
+    """A Substack Note, as returned by the explore and per-publication note APIs."""
 
     id: int
     name: Optional[str] = None
@@ -141,6 +142,16 @@ class ExploreItem(BaseModel):
 
 class ExploreResponse(BaseModel):
     items: List[ExploreItem]
+
+
+class NotesResponse(BaseModel):
+    """One page of a publication's own note feed."""
+
+    items: List[ExploreItem] = Field(default_factory=list)
+    nextCursor: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
 
 
 # Resolve forward refs
@@ -563,3 +574,114 @@ async def explore_substack(
         return ReadResult.fail(
             f"substack://explore?tab={tab}", str(e), source_type="substack"
         )
+
+
+# ---------------------------------------------------------------------------
+# Notes API (per publication)
+# ---------------------------------------------------------------------------
+
+# Notes are a separate content stream from posts: they never appear in the RSS
+# feed or in /api/v1/posts, so a publication watched by the `rss` reader is
+# missing all of them. Public endpoint, no auth.
+NOTES_PAGE_SIZE = 20
+NOTES_MAX_PAGES = 25  # ~500 notes; the ceiling exists so a bad cursor can't loop
+
+
+def _note_url(handle: str, note_id: int) -> str:
+    return f"https://substack.com/@{handle}/note/c-{note_id}"
+
+
+def _note_title(body: str) -> str:
+    """First line of the note, as its display title.
+
+    Notes have no title field. This author brackets one in 《》 on the first
+    line, but that is a habit, not a rule — so take the first non-empty line
+    whatever it looks like, and let the body carry the rest.
+    """
+    for line in (body or "").splitlines():
+        line = line.strip()
+        if line:
+            return line[:120]
+    return ""
+
+
+def _parse_note_date(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+async def list_notes(
+    url: Optional[str] = None,
+    *,
+    publication: Optional[str] = None,
+    published_after: Optional[datetime] = None,
+    max_pages: int = NOTES_MAX_PAGES,
+) -> List[ReadResult]:
+    """One ReadResult per note the publication itself posted, newest first.
+
+    Mirrors `read_rss_entries`: entry-level results the fetch layer can archive
+    one by one. Restacks of other people's notes are dropped — the watchlist
+    entry is about this author, and a restack's text is someone else's.
+
+    `published_after` stops paging as soon as the feed goes older than the
+    window, so a daily run costs one page.
+    """
+    pub = publication or (_extract_subdomain(url) if url else None)
+    if not pub:
+        return [ReadResult.fail(url or "substack://notes",
+                                "Could not determine Substack publication",
+                                source_type="substack")]
+
+    handle = pub.split(".")[0]
+    api_url = f"{_pub_base_url(pub)}/api/v1/notes"
+    results: list[ReadResult] = []
+    seen: set[int] = set()
+    cursor: Optional[str] = None
+
+    for _ in range(max_pages):
+        params = {"limit": NOTES_PAGE_SIZE}
+        if cursor:
+            params["cursor"] = cursor
+        try:
+            page = NotesResponse.model_validate(await _fetch_api(api_url, params=params))
+        except Exception as e:
+            logger.error(f"Substack notes fetch failed for {pub}: {e}")
+            results.append(ReadResult.fail(api_url, str(e), source_type="substack"))
+            break
+
+        if not page.items:
+            break
+
+        reached_window_end = False
+        for item in page.items:
+            c = item.comment
+            if c is None or c.id in seen:
+                continue
+            seen.add(c.id)
+            if (c.handle or "").lower() != handle.lower():
+                continue  # restack / reply from another author
+            published_at = _parse_note_date(c.date)
+            if published_after and published_at and published_at < published_after:
+                reached_window_end = True
+                continue
+            body = c.body or ""
+            if not body.strip():
+                continue
+            results.append(ReadResult(
+                url=_note_url(handle, c.id),
+                text=body,
+                title=_note_title(body),
+                source_type="substack",
+                author=c.name or handle,
+                published_at=published_at,
+            ))
+
+        cursor = page.nextCursor
+        if reached_window_end or not cursor:
+            break
+
+    return results

@@ -150,6 +150,10 @@ async def _dispatch(reader: str, url: Optional[str], params: dict) -> list[ReadR
         result = await read_substack(url, **params)
         return [result]
 
+    elif reader == "substack_notes":
+        from .readers.substack import list_notes
+        return await list_notes(url, **params)
+
     elif reader == "substack_search":
         from .readers.substack import search_substack
         result = await search_substack(**params)

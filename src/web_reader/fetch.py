@@ -6,8 +6,9 @@ recurring acquisition step of the pipeline: downstream consumers never fetch
 from the network themselves — they read the store this command maintains.
 
 Per reader:
-    rss           → article full text  → output/substack/<id>/
-    rss_podcast   → audio + local ASR  → output/podcast/<id>/  (audio kept in audio/)
+    rss            → article full text → output/substack/<source_id>/
+    substack_notes → Substack Notes    → output/substack/<source_id>/
+    rss_podcast    → audio + local ASR → output/podcast/<source_id>/  (audio kept in audio/)
     youtube_channel → captions, ASR fallback for caption-less videos
                                        → output/youtube/<handle>/{subtitles,transcripts}/
 
@@ -83,6 +84,37 @@ async def _fetch_rss(source: SourceConfig, store: Store, since: datetime, dry_ru
     for r in results:
         if not r.ok:
             print(f"    ✗ {(r.title or r.url)[:50]}: {r.error}")
+            continue
+        if store.has_article(res.source_id, r.url):
+            res.reused += 1
+            continue
+        if dry_run:
+            print(f"    would fetch: {(r.title or r.url)[:70]}")
+        else:
+            store.save_article(
+                res.source_id, r.url, r.title, r.published_at, r.text, author=r.author,
+            )
+        res.new += 1
+    return res
+
+
+async def _fetch_substack_notes(
+    source: SourceConfig, store: Store, since: datetime, dry_run: bool,
+) -> SourceResult:
+    """Substack Notes — a stream the RSS feed does not carry at all.
+
+    Archived alongside the publication's posts (same store shape), but under
+    its own source_id, so a KOL's long-form and short-form stay separately
+    de-duplicated while `kol_id` reunites them downstream.
+    """
+    from .readers.substack import list_notes
+
+    res = SourceResult(source.source_id, source.reader)
+    results = await list_notes(source.url, published_after=since, **source.params)
+    for r in results:
+        if not r.ok:
+            print(f"    ✗ {(r.title or r.url)[:50]}: {r.error}")
+            res.error = r.error
             continue
         if store.has_article(res.source_id, r.url):
             res.reused += 1
@@ -265,6 +297,7 @@ async def _fetch_youtube(
 
 _FETCHERS = {
     "rss": _fetch_rss,
+    "substack_notes": _fetch_substack_notes,
     "rss_podcast": _fetch_podcast,
     "youtube": _fetch_youtube,
     "youtube_channel": _fetch_youtube,
@@ -298,7 +331,10 @@ async def fetch_watchlist(
             continue
         print(f"  {sid} ({source.reader})")
         try:
-            if source.reader == "rss":
+            # --limit caps *expensive* per-item work (ASR, yt-dlp). The
+            # cheap readers take one request per page and ignore it; cap
+            # those declaratively via params instead.
+            if source.reader in ("rss", "substack_notes"):
                 res = await fetcher(source, store, since, dry_run)
             else:
                 res = await fetcher(source, store, since, dry_run, limit_override)
