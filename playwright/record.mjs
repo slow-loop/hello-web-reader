@@ -56,13 +56,18 @@ function parseArgs(argv) {
     fps: 0,
     wait: 0,
     click: null,
+    opencli: null,
+    cookies: null,
+    waitSelector: null,
   };
   for (const arg of argv) {
     if (!arg.startsWith("--")) {
       args.url = arg;
       continue;
     }
-    const [key, val] = arg.slice(2).split("=");
+    const eqIdx = arg.indexOf("=");
+    const key = eqIdx === -1 ? arg.slice(2) : arg.slice(2, eqIdx);
+    const val = eqIdx === -1 ? null : arg.slice(eqIdx + 1);
     if (key === "out") args.out = val;
     else if (key === "width") args.width = Number(val);
     else if (key === "height") args.height = Number(val);
@@ -77,6 +82,9 @@ function parseArgs(argv) {
     else if (key === "fps") args.fps = Number(val);
     else if (key === "wait") args.wait = Number(val);
     else if (key === "click") args.click = val;
+    else if (key === "opencli") args.opencli = val || "default";
+    else if (key === "cookies") args.cookies = val;
+    else if (key === "wait-selector") args.waitSelector = val;
   }
   return args;
 }
@@ -104,16 +112,56 @@ async function main() {
   const context = await browser.newContext({
     viewport: { width: args.width, height: args.height },
     deviceScaleFactor: args.dpr,
+    userAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
     recordVideo: {
       dir: videoDir,
       size: { width: args.width, height: args.height },
     },
   });
+
+  if (args.opencli) {
+    try {
+      const { Page } = await import("/Users/cc/Developer/GitHub/OpenCLI/dist/src/browser/page.js");
+      const opencliPage = new Page(args.opencli);
+      const rawCookies = await opencliPage.getCookies({ url: args.url });
+      if (rawCookies && rawCookies.length > 0) {
+        const pwCookies = rawCookies.map((c) => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain || new URL(args.url).hostname,
+          path: c.path || "/",
+          httpOnly: Boolean(c.httpOnly),
+          secure: Boolean(c.secure),
+          sameSite: c.sameSite === "none" ? "None" : (c.sameSite === "strict" ? "Strict" : "Lax"),
+        }));
+        await context.addCookies(pwCookies);
+        console.error(`[record.mjs] Injected ${pwCookies.length} cookies from OpenCLI session '${args.opencli}'`);
+      }
+    } catch (e) {
+      console.error(`[record.mjs] OpenCLI cookie injection warning: ${e.message}`);
+    }
+  } else if (args.cookies) {
+    try {
+      const fs = await import("node:fs/promises");
+      const data = JSON.parse(await fs.readFile(args.cookies, "utf-8"));
+      await context.addCookies(Array.isArray(data) ? data : data.cookies || []);
+      console.error(`[record.mjs] Injected cookies from ${args.cookies}`);
+    } catch (e) {
+      console.error(`[record.mjs] Cookie file warning: ${e.message}`);
+    }
+  }
+
   const page = await context.newPage();
   const recordingStart = Date.now(); // recordVideo starts capturing from page creation
 
   console.error(`Loading ${args.url} ...`);
-  await page.goto(args.url, { waitUntil: "load", timeout: 60000 });
+  try {
+    await page.goto(args.url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await page.waitForTimeout(2500);
+  } catch (err) {
+    console.error(`[record.mjs] Navigation notice: ${err.message}`);
+  }
   if (args.wait) await page.waitForTimeout(args.wait);
   if (args.zoom !== 1) {
     await page.evaluate((z) => {
@@ -127,6 +175,15 @@ async function main() {
       await page.waitForTimeout(600);
     } catch {
       console.error(`click skipped (not found): ${text}`);
+    }
+  }
+
+  if (args.waitSelector) {
+    try {
+      await page.waitForSelector(args.waitSelector, { timeout: 30000 });
+      console.error(`[record.mjs] Selector ready: ${args.waitSelector}`);
+    } catch (e) {
+      console.error(`[record.mjs] Wait-selector warning: ${e.message}`);
     }
   }
 
