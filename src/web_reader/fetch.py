@@ -133,8 +133,19 @@ async def _fetch_podcast(
     source: SourceConfig, store: Store, since: datetime, dry_run: bool, limit_override: int | None,
 ) -> SourceResult:
     from .readers.rss_podcast import list_episodes, read_episode
+    from .transcribe import asr
 
     res = SourceResult(source.source_id, source.reader)
+
+    # A podcast episode is audio with no transcript track — every fetch here
+    # is ASR, never the caption-first path youtube_channel gets. Check before
+    # listing episodes so a missing extra fails once for the source, not once
+    # per episode with the same ModuleNotFoundError.
+    if not dry_run and not asr.is_available():
+        res.error = asr.INSTALL_HINT
+        print(f"    ✗ {res.error}")
+        return res
+
     limit = limit_override if limit_override is not None else int(source.params.get("limit", DEFAULT_PODCAST_LIMIT))
 
     todo = []
@@ -186,6 +197,7 @@ async def _fetch_youtube(
     from .readers.youtube import (
         fetch_video_details, list_channel_videos, probe_captions, read_youtube,
     )
+    from .transcribe import asr
 
     res = SourceResult(source.source_id, source.reader)
     channel_id = source.params.get("channel_id") or source.params.get("handle")
@@ -246,14 +258,27 @@ async def _fetch_youtube(
     # captions its uploads is a property of the channel, and "is this a channel
     # we want to pay ASR for" is a channel-level decision anyway. Sampled, so
     # say so — a channel with inconsistent captions will not match every video.
-    dry_run_sample = probe_captions(todo[0]["url"]) if (dry_run and todo) else None
+    #
+    # Also run this probe on a live (non-dry) run when ASR isn't installed: it
+    # is the same one yt-dlp request either way, and it is what tells us
+    # whether this channel is even going to need the extra we don't have.
+    need_asr_check = dry_run or not asr.is_available()
+    caption_sample = probe_captions(todo[0]["url"]) if (need_asr_check and todo) else None
     if dry_run and todo:
-        if dry_run_sample:
-            print(f"    channel has {dry_run_sample} captions (sampled newest) → no ASR")
+        if caption_sample:
+            print(f"    channel has {caption_sample} captions (sampled newest) → no ASR")
         else:
             h = sum(v["duration_seconds"] for v in todo) / 3600
             print(f"    ⚠ no captions on newest video → ASR likely for all {len(todo)}: "
                   f"{h:.1f}h (~{h / ASR_REALTIME_FACTOR * 60:.0f} min)")
+
+    # Same failure, once, up front — not once per caption-less video. A
+    # channel that captions everything never touches ASR, so a missing extra
+    # only blocks it here if the sample actually came back caption-less.
+    if not dry_run and not asr.is_available() and todo and not caption_sample:
+        res.error = asr.INSTALL_HINT
+        print(f"    ✗ {res.error} (sampled newest video: no captions)")
+        return res
 
     languages = source.params.get("languages")
     asr_seconds = 0

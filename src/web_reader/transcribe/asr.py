@@ -7,6 +7,7 @@ SenseVoiceSmall model (~350MB) into the modelscope cache.
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import io
 import logging
 import os
@@ -19,6 +20,19 @@ logger = logging.getLogger(__name__)
 
 _model_lock = Lock()
 _model: Any = None
+
+INSTALL_HINT = "transcribe extra not installed (funasr) — run: uv sync --extra transcribe"
+
+
+def is_available() -> bool:
+    """Whether funasr is importable, without paying for the actual import.
+
+    Callers that always need ASR (podcast sources) or that can tell ahead of
+    time they will (a channel probed as caption-less) use this to skip the
+    whole source up front instead of failing once per item — see fetch.py.
+    """
+    return importlib.util.find_spec("funasr") is not None
+
 
 # Loggers funasr / modelscope / torchaudio chatter through. We pin them at
 # WARNING so only real problems reach the user. Set WEB_READER_ASR_VERBOSE=1
