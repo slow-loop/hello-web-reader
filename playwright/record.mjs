@@ -112,6 +112,8 @@ async function main() {
   const context = await browser.newContext({
     viewport: { width: args.width, height: args.height },
     deviceScaleFactor: args.dpr,
+    // light theme: a dark page reads as another site next to the rest of a short (hello-video, 2026-09-14)
+    colorScheme: "light",
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
     recordVideo: {
