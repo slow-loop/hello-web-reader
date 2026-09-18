@@ -10,13 +10,18 @@ Layout, one directory per source:
 
     output/youtube/<channel>/subtitles/<YYYY-MM-DD>_<video_id>_<title>.md
     output/youtube/<channel>/transcripts/<YYYY-MM-DD>_<video_id>_<title>.md
+    output/youtube/<channel>/videos/<video_id>[_<title>].<ext>
     output/podcast/<source_id>/<YYYY-MM-DD>_<guid_slug>.md
     output/podcast/<source_id>/audio/<audio files>
     output/substack/<source_id>/<YYYY-MM-DD>_<url_slug>.md
 
 `subtitles/` holds real caption tracks; `transcripts/` holds local ASR output
 for videos that have none — machine transcripts are not interchangeable with
-captions, so they never share a folder.
+captions, so they never share a folder. `videos/` holds raw source video kept
+around manually (e.g. left over from a `scripts/extract_keyframes.py` run);
+this module never writes or reads it, but the name is fixed so channels don't
+each invent their own subfolder (2026-09-18 normalized from a mix of `video/`,
+flat files, and `videos/`).
 
 Files written by this module carry YAML frontmatter (url, title,
 published_at, ...). Files that predate the contract may not; read functions
