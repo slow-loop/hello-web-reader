@@ -2,9 +2,9 @@
 // Usage: node record.mjs <url> [--out=out.mp4] [--width=1280] [--height=720]
 //        [--step=700] [--hold=1200] [--max-slides=60] [--headless]
 //        [--dpr=2] [--zoom=2] [--glide=600] [--scroll=200] [--fps=30] [--wait=3000] [--click="關閉,我知道了"]
-// Slideshow-style capture: jump `step` px, hold `hold` ms, jump again. With
-// --glide=<ms> each step is animated over that many ms instead of jumping
-// (glide, hold, glide). With --scroll=<px/s> there are no steps at all: one
+// The way a person reads a page: glide `step` px over `glide` ms, hold `hold`
+// ms, glide again (600 ms by default; --glide=0 jumps instead of gliding, a
+// slideshow). With --scroll=<px/s> there are no steps at all: one
 // continuous linear scroll from the top to the bottom (or `max-slides * step`
 // px, whichever comes first), after an initial `hold` — the reading pace of a
 // short, where the page moves the whole time the narration does. Runs headed
@@ -51,7 +51,7 @@ function parseArgs(argv) {
     headless: false,
     dpr: 1,
     zoom: 1,
-    glide: 0,
+    glide: 600,
     scroll: 0,
     fps: 0,
     wait: 0,
