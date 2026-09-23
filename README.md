@@ -204,6 +204,7 @@ Standalone scripts in [`scripts/`](scripts/), not wired into the `web-reader` CL
 | `split_audio_on_silence.py` | Split an audio file into chunks near silence boundaries (used internally by `transcribe_local_audio.py` for long/large files) |
 | `export_claude_conversations.py` | Export local Claude Code / Claude Desktop Cowork conversation history to plain files (macOS only) |
 | `opencli_rednote_liked.js` | Index and fetch the signed-in rednote.com account's Like tab (needs OpenCLI + a logged-in controlled Chrome) |
+| `opencli_ndltd.js` | Search and fetch biblio + abstracts from NDLTD (臺灣博碩士論文知識加值系統), Taiwan's thesis/dissertation database (needs OpenCLI + a browser session past its CAPTCHA) |
 
 Indexing and fetching are separate on purpose: building the index costs zero
 per-note requests, so it can cover everything and run often; fetching a note
@@ -215,6 +216,24 @@ node scripts/opencli_rednote_liked.js                          # print the index
 node scripts/opencli_rednote_liked.js --index                  # refresh it (3 scrolls, ~40 notes)
 node scripts/opencli_rednote_liked.js --index --scrolls all    # full sweep
 node scripts/opencli_rednote_liked.js --fetch <id> [<id>...]   # already-fetched ids are skipped
+```
+
+NDLTD has no API a plain client can reach (its OAI-PMH endpoint IP-whitelists
+institutions only; its open-data CSVs are annual snapshots with no abstract)
+— OpenCLI driving a real browser is the only way to get search, abstracts and
+citation counts. The site puts up a site-wide CAPTCHA that can reappear
+mid-session with no warning (every command stops the whole run when it hits
+one — clear it by hand in the `ndltd` OpenCLI browser session and re-run),
+and a *second*, per-thesis CAPTCHA gates every full-text PDF even when
+logged in, so `--fetch` never downloads a PDF — it records the one-time
+declaration-page link and the permanent handle URL and leaves the rest to a
+human. Pool lands in `output/ndltd/<year>/<id>-<slug>.md`. Full notes in the
+script header.
+
+```bash
+node scripts/opencli_ndltd.js                        # print the index (default, offline)
+node scripts/opencli_ndltd.js --search <query>        # run a search, snapshot the results
+node scripts/opencli_ndltd.js --fetch <id> [<id>...]  # biblio + abstracts; already-fetched ids are skipped
 ```
 
 ```bash
