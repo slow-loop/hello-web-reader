@@ -205,6 +205,26 @@ Standalone scripts in [`scripts/`](scripts/), not wired into the `web-reader` CL
 | `export_claude_conversations.py` | Export local Claude Code / Claude Desktop Cowork conversation history to plain files (macOS only) |
 | `opencli_rednote_liked.js` | Index and fetch the signed-in rednote.com account's Like tab (needs OpenCLI + a logged-in controlled Chrome) |
 | `opencli_ndltd.js` | Search and fetch biblio + abstracts from NDLTD (臺灣博碩士論文知識加值系統), Taiwan's thesis/dissertation database (needs OpenCLI + a browser session past its CAPTCHA) |
+| `opencli_ptt.js` | Search a PTT board and fetch chosen threads (with pushes) as Markdown (needs OpenCLI; no login or CAPTCHA) |
+
+**Shared convention for the `opencli_*.js` browser scripts.** An agent only runs
+the script; the script drives one named OpenCLI browser session (`ptt`,
+`ndltd`, `rednote-liked`) in a real, visible Chrome window. The session is
+never closed by a script and is asked to survive 24 h of idle time (OpenCLI's
+own default is 10 min), so search → read reuses the same page, cookies and
+logins across runs. When a run fails or returns nothing, look at the live page
+instead of guessing — the agent can read it with the same session name:
+
+```bash
+OC="node ~/.opencli/node_modules/@jackwener/opencli/dist/src/main.js"
+$OC browser ptt state                # URL, title, clickable elements
+$OC browser ptt screenshot out.png   # what the window shows
+$OC browser ptt eval '(() => ({ title: document.title }))()'   # read anything on the page
+$OC browser ptt close                # only when you really want it gone
+```
+
+OpenCLI is an npm package (`~/.opencli`, run with `node`), not a `uvx` tool.
+
 
 Indexing and fetching are separate on purpose: building the index costs zero
 per-note requests, so it can cover everything and run often; fetching a note
@@ -234,6 +254,19 @@ script header.
 node scripts/opencli_ndltd.js                        # print the index (default, offline)
 node scripts/opencli_ndltd.js --search <query>        # run a search, snapshot the results
 node scripts/opencli_ndltd.js --fetch <id> [<id>...]  # biblio + abstracts; already-fetched ids are skipped
+```
+
+PTT is plain HTML with no login or CAPTCHA, so `web-reader <ptt url>` (the
+stateless `httpx` reader) is enough for a single page; `opencli_ptt.js` is for
+the search → pick → read flow in one persistent browser. Boards that ask for the
+over-18 confirmation are clicked through once per session. Pool lands in
+`output/ptt/<board>/<id>-<slug>.md`; a thread ref is `<Board>/M.<ts>.A.<x>` or a
+full URL. Full notes in the script header.
+
+```bash
+node scripts/opencli_ptt.js                                        # print the index (default, offline)
+node scripts/opencli_ptt.js --search <query> [--board Stock] [--pages 2]   # search a board, snapshot the results
+node scripts/opencli_ptt.js --fetch <ref> [<ref>...]               # thread + pushes; already-fetched refs are skipped
 ```
 
 ```bash

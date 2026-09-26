@@ -165,6 +165,35 @@ cache = ReadCache()
 result = await read_url("https://example.com", store=cache, cache_ttl=3600)
 ```
 
+## OpenCLI 腳本
+
+[`scripts/`](scripts/) 裡的 `opencli_*.js`（`opencli_ptt.js`、`opencli_ndltd.js`、`opencli_rednote_liked.js`）不屬於 `web-reader` CLI，
+用 OpenCLI 驅動真實瀏覽器，共同約定：
+
+- Agent 只負責執行腳本；腳本操作一個固定名稱的 OpenCLI browser session（`ptt`、`ndltd`、`rednote-liked`），是可見的 Chrome 視窗。
+- 腳本**不會關閉** session，並要求閒置 24 小時才回收（OpenCLI 預設 10 分鐘），所以「先搜尋、再閱讀」在同一個頁面、同一份 cookie 與登入狀態下連續進行。
+- 出問題時直接看現場，用同名 session 讀取即可：
+
+```bash
+OC="node ~/.opencli/node_modules/@jackwener/opencli/dist/src/main.js"
+$OC browser ptt state                # 網址、標題、可點元素
+$OC browser ptt screenshot out.png   # 視窗畫面
+$OC browser ptt eval '(() => ({ title: document.title }))()'   # 讀頁面任何內容
+$OC browser ptt close                # 真的想關掉才用
+```
+
+OpenCLI 是 npm 套件（`~/.opencli`，用 `node` 執行），不是 `uvx` 工具。
+
+PTT 是純 HTML、免登入無驗證碼，單頁用 `web-reader <ptt 網址>` 就夠；`opencli_ptt.js` 用在「搜尋 → 挑選 → 閱讀」的連續流程：
+
+```bash
+node scripts/opencli_ptt.js                                        # 印出索引（預設，離線）
+node scripts/opencli_ptt.js --search <關鍵字> [--board Stock] [--pages 2]
+node scripts/opencli_ptt.js --fetch <Board>/M.<ts>.A.<x> [...]     # 文章 + 推文，已抓過的略過
+```
+
+輸出在 `output/ptt/<board>/<id>-<slug>.md`。
+
 ## MCP Server
 
 通用 `stdio` MCP server，不內建任何 domain 特定設定。

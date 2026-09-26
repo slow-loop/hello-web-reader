@@ -70,6 +70,9 @@ const OPENCLI_BIN = path.join(
 const BASE_DIR = path.join(__dirname, '..', 'output', 'rednote', 'liked');
 const INDEX_DIR = path.join(BASE_DIR, '_index');
 const BROWSER_SESSION = 'rednote-liked';
+// The session stays open between runs (never closed here). OpenCLI garbage-collects
+// an owned session after 10 idle minutes, so ask for a day — value is in seconds.
+const IDLE_TIMEOUT_SECONDS = '86400';
 const WEB_HOST = 'www.rednote.com';
 const DEFAULT_LIST_LIMIT = 60;
 const MAX_SCROLLS = 200;
@@ -85,6 +88,7 @@ function opencli(args) {
   return spawnSync('node', [OPENCLI_BIN, ...args], {
     encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 64,
+    env: { OPENCLI_BROWSER_IDLE_TIMEOUT: IDLE_TIMEOUT_SECONDS, ...process.env },
   });
 }
 
@@ -207,29 +211,25 @@ function cmdIndex(scrollsRaw) {
 
   const byId = new Map();
   let quietRounds = 0;
-  try {
-    // scrolls=N means N scrolls, so N+1 reads: the first screen plus each
-    // batch a scroll pulls in. Measured: the Like tab hydrates 10 notes per
-    // batch, so the default 3 covers the newest ~40.
-    for (let round = 0; round <= scrolls; round += 1) {
-      const snapshot = browserEval(EXTRACT_LIKED_JS);
-      const before = byId.size;
-      for (const entry of snapshot.entries || []) {
-        const id = idOf(entry);
-        if (id) byId.set(id, entry);
-      }
-      log(`Like tab: ${byId.size} notes loaded`);
-      quietRounds = byId.size === before ? quietRounds + 1 : 0;
-      if (round === scrolls) break;
-      if (snapshot.atBottom && quietRounds >= QUIET_ROUNDS_TO_STOP) {
-        log('Reached the bottom of the Like tab');
-        break;
-      }
-      browserRun('window.scrollTo(0, document.documentElement.scrollHeight)');
-      browserWait(2);
+  // scrolls=N means N scrolls, so N+1 reads: the first screen plus each
+  // batch a scroll pulls in. Measured: the Like tab hydrates 10 notes per
+  // batch, so the default 3 covers the newest ~40.
+  for (let round = 0; round <= scrolls; round += 1) {
+    const snapshot = browserEval(EXTRACT_LIKED_JS);
+    const before = byId.size;
+    for (const entry of snapshot.entries || []) {
+      const id = idOf(entry);
+      if (id) byId.set(id, entry);
     }
-  } finally {
-    opencli(['browser', BROWSER_SESSION, 'close']);
+    log(`Like tab: ${byId.size} notes loaded`);
+    quietRounds = byId.size === before ? quietRounds + 1 : 0;
+    if (round === scrolls) break;
+    if (snapshot.atBottom && quietRounds >= QUIET_ROUNDS_TO_STOP) {
+      log('Reached the bottom of the Like tab');
+      break;
+    }
+    browserRun('window.scrollTo(0, document.documentElement.scrollHeight)');
+    browserWait(2);
   }
 
   const notes = [];
@@ -650,25 +650,21 @@ async function cmdFetch(ids, force, commentScrollsRaw, videoLow) {
 
   fs.mkdirSync(BASE_DIR, { recursive: true });
   log(`To fetch: ${queue.length}`);
-  try {
-    for (let index = 0; index < queue.length; index += 1) {
-      const entry = queue[index];
-      log(`Fetching [${entry.id}]`);
-      const result = await fetchOne(entry, commentScrolls, videoLow);
-      process.stdout.write(
-        `OK ${entry.id} → ${path.relative(process.cwd(), result.noteDir)}/`
-        + ` (media=${result.media.length} ${(result.bytes / 1048576).toFixed(1)}MB`
-        + ` comments=${result.comments})\n`,
-      );
-      // Pause between notes only — a single-note run never sleeps.
-      if (index === queue.length - 1) continue;
-      const longBreak = (index + 1) % 5 === 0;
-      const delay = longBreak ? 180 + Math.random() * 120 : 30 + Math.random() * 60;
-      log(`Resting ${Math.round(delay)} seconds${longBreak ? ' (long break)' : ''}`);
-      sleepSeconds(delay);
-    }
-  } finally {
-    opencli(['browser', BROWSER_SESSION, 'close']);
+  for (let index = 0; index < queue.length; index += 1) {
+    const entry = queue[index];
+    log(`Fetching [${entry.id}]`);
+    const result = await fetchOne(entry, commentScrolls, videoLow);
+    process.stdout.write(
+      `OK ${entry.id} → ${path.relative(process.cwd(), result.noteDir)}/`
+      + ` (media=${result.media.length} ${(result.bytes / 1048576).toFixed(1)}MB`
+      + ` comments=${result.comments})\n`,
+    );
+    // Pause between notes only — a single-note run never sleeps.
+    if (index === queue.length - 1) continue;
+    const longBreak = (index + 1) % 5 === 0;
+    const delay = longBreak ? 180 + Math.random() * 120 : 30 + Math.random() * 60;
+    log(`Resting ${Math.round(delay)} seconds${longBreak ? ' (long break)' : ''}`);
+    sleepSeconds(delay);
   }
 }
 

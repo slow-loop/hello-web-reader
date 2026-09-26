@@ -53,8 +53,8 @@
  *   free member account. This script never creates that session or handles a
  *   CAPTCHA itself — both are a human's job, once, in:
  *     node ~/.opencli/node_modules/@jackwener/opencli/dist/src/main.js browser ndltd open https://ndltd.ncl.edu.tw/
- * - Unlike the reddit/rednote scripts, this one never closes that session
- *   when it finishes. It is meant to be a standing, logged-in session you
+ * - This script never closes that session when it finishes (nor do the other
+ *   opencli_*.js browser scripts). It is a standing, logged-in session you
  *   keep reusing across runs, not a disposable one spun up per run.
  *
  * LAYOUT (under output/ndltd/)
@@ -84,6 +84,9 @@ const OPENCLI_BIN = path.join(
 const BASE_DIR = path.join(__dirname, '..', 'output', 'ndltd');
 const INDEX_DIR = path.join(BASE_DIR, '_index');
 const BROWSER_SESSION = 'ndltd';
+// An owned OpenCLI session is garbage-collected after 10 idle minutes, which
+// would drop a CAPTCHA-cleared session. Ask for a day — value is in seconds.
+const IDLE_TIMEOUT_SECONDS = '86400';
 const HOST = 'ndltd.ncl.edu.tw';
 const DEFAULT_LIST_LIMIT = 80;
 
@@ -97,6 +100,7 @@ function opencli(args) {
   return spawnSync('node', [OPENCLI_BIN, ...args], {
     encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 64,
+    env: { OPENCLI_BROWSER_IDLE_TIMEOUT: IDLE_TIMEOUT_SECONDS, ...process.env },
   });
 }
 
