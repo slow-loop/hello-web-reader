@@ -175,11 +175,11 @@ result = await read_url("https://example.com", store=cache, cache_ttl=3600)
 - 出問題時直接看現場，用同名 session 讀取即可：
 
 ```bash
-OC="node ~/.opencli/node_modules/@jackwener/opencli/dist/src/main.js"
-$OC browser ptt state                # 網址、標題、可點元素
-$OC browser ptt screenshot out.png   # 視窗畫面
-$OC browser ptt eval '(() => ({ title: document.title }))()'   # 讀頁面任何內容
-$OC browser ptt close                # 真的想關掉才用
+oc() { node "$HOME/.opencli/node_modules/@jackwener/opencli/dist/src/main.js" "$@"; }
+oc browser ptt state                # 網址、標題、可點元素
+oc browser ptt screenshot out.png   # 視窗畫面
+oc browser ptt eval '(() => ({ title: document.title }))()'   # 讀頁面任何內容
+oc browser ptt close                # 真的想關掉才用
 ```
 
 OpenCLI 是 npm 套件（`~/.opencli`，用 `node` 執行），不是 `uvx` 工具。

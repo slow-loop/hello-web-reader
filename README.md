@@ -216,11 +216,11 @@ logins across runs. When a run fails or returns nothing, look at the live page
 instead of guessing — the agent can read it with the same session name:
 
 ```bash
-OC="node ~/.opencli/node_modules/@jackwener/opencli/dist/src/main.js"
-$OC browser ptt state                # URL, title, clickable elements
-$OC browser ptt screenshot out.png   # what the window shows
-$OC browser ptt eval '(() => ({ title: document.title }))()'   # read anything on the page
-$OC browser ptt close                # only when you really want it gone
+oc() { node "$HOME/.opencli/node_modules/@jackwener/opencli/dist/src/main.js" "$@"; }
+oc browser ptt state                # URL, title, clickable elements
+oc browser ptt screenshot out.png   # what the window shows
+oc browser ptt eval '(() => ({ title: document.title }))()'   # read anything on the page
+oc browser ptt close                # only when you really want it gone
 ```
 
 OpenCLI is an npm package (`~/.opencli`, run with `node`), not a `uvx` tool.
