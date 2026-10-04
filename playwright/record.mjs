@@ -29,6 +29,13 @@
 // duplicates every 6th frame — a visible tick on a continuous scroll. --fps=30
 // motion-interpolates to the target rate (ffmpeg minterpolate; ~6x realtime,
 // so a 12s clip takes about a minute). Skip it for step-and-hold captures.
+// --phone emulates a phone for real (430 css px wide unless --width says otherwise, dpr 2, an iPhone's user
+// agent, touch): a site that picks its layout by user agent or viewport gives its phone page, which CSS zoom
+// on a wide window does not get. --shot=<png> takes one still instead of a recording: --height css px from
+// the top (default 1800), and with --mark="<text>" (any number) <png>.marks.json, each text's line boxes
+// [x, y, w, h] in the still's pixels, read from the page's text itself. --hide="<css>" hides more before it.
+// --clean hides ads (iframes, ad/sponsor/taboola class names) and everything floating (chat avatars,
+// back-to-top, bottom bars, summary bars), kept up while the page scrolls since ads load late.
 // --wait adds settle time before capture (slow/animated pages); --click
 // dismisses cookie/subscribe overlays by visible text (comma-separated
 // candidates, misses ignored). Both happen before the trim point, so neither
@@ -56,6 +63,11 @@ function parseArgs(argv) {
     fps: 0,
     wait: 0,
     click: null,
+    clean: false,
+    phone: false,
+    shot: null,
+    marks: [],
+    hide: null,
     opencli: null,
     cookies: null,
     waitSelector: null,
@@ -82,6 +94,11 @@ function parseArgs(argv) {
     else if (key === "fps") args.fps = Number(val);
     else if (key === "wait") args.wait = Number(val);
     else if (key === "click") args.click = val;
+    else if (key === "clean") args.clean = true;
+    else if (key === "phone") args.phone = true;
+    else if (key === "shot") args.shot = val;
+    else if (key === "mark") args.marks.push(val);
+    else if (key === "hide") args.hide = val;
     else if (key === "opencli") args.opencli = val || "default";
     else if (key === "cookies") args.cookies = val;
     else if (key === "wait-selector") args.waitSelector = val;
@@ -102,24 +119,29 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.url) {
     console.error(
-      "Usage: node record.mjs <url> [--out=out.mp4] [--width=1280] [--height=720] [--step=700] [--hold=1200] [--max-slides=60] [--headless] [--dpr=2] [--zoom=2] [--glide=600] [--scroll=200] [--fps=30] [--wait=3000] [--click=\"關閉,我知道了\"]",
+      "Usage: node record.mjs <url> [--out=out.mp4] [--width=1280] [--height=720] [--step=700] [--hold=1200] [--max-slides=60] [--headless] [--dpr=2] [--zoom=2] [--glide=600] [--scroll=200] [--fps=30] [--wait=3000] [--click=\"關閉,我知道了\"] [--clean] [--phone] [--shot=out.png --mark=\"…\" --hide=\"css\"]",
     );
     process.exit(1);
   }
 
+  if (args.phone) {
+    if (!process.argv.some((a) => a.startsWith("--width="))) args.width = 430;
+    if (!process.argv.some((a) => a.startsWith("--height="))) args.height = args.shot ? 1800 : 932;
+    if (!process.argv.some((a) => a.startsWith("--dpr="))) args.dpr = 2;
+  } else if (args.shot && !process.argv.some((a) => a.startsWith("--height="))) args.height = 1800;
   const videoDir = await mkdtemp(path.join(tmpdir(), "scroll-capture-"));
   const browser = await chromium.launch({ headless: args.headless });
   const context = await browser.newContext({
-    viewport: { width: args.width, height: args.height },
+    // a still is shot from a phone-high window and clipped to --height; a recording is the window itself
+    viewport: { width: args.width, height: args.shot ? (args.phone ? 932 : 900) : args.height },
     deviceScaleFactor: args.dpr,
     // light theme: a dark page reads as another site next to the rest of a short (hello-video, 2026-09-14)
     colorScheme: "light",
-    userAgent:
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-    recordVideo: {
-      dir: videoDir,
-      size: { width: args.width, height: args.height },
-    },
+    ...(args.phone
+      ? { isMobile: true, hasTouch: true,
+          userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1" }
+      : { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36" }),
+    ...(args.shot ? {} : { recordVideo: { dir: videoDir, size: { width: args.width, height: args.height } } }),
   });
 
   if (args.opencli) {
@@ -187,6 +209,81 @@ async function main() {
     } catch (e) {
       console.error(`[record.mjs] Wait-selector warning: ${e.message}`);
     }
+  }
+
+  if (args.clean) {
+    await page.evaluate(() => {
+      const ad = /(^|[-_ ])(ad|ads|adv|advert|advertisement|sponsor|sponsored|taboola|outbrain|dfp|gpt)([-_ 0-9]|$)/i;
+      // into shadow roots too: floating widgets (summary bars, chat buttons) often live in one
+      const sweep = (root = document.body) => root.querySelectorAll("*").forEach((el) => {
+        if (el.shadowRoot) sweep(el.shadowRoot);
+        if (el.style.getPropertyPriority("display") === "important") return;
+        const cls = typeof el.className === "string" ? el.className : "";
+        const pos = getComputedStyle(el).position;
+        // !important: a site's own !important rule (a bar shown on scroll) would win over a plain inline style
+        if (el.matches("iframe, ins") || ad.test(el.id) || ad.test(cls) || pos === "fixed" || pos === "sticky") el.style.setProperty("display", "none", "important");
+      });
+      // every frame and on every change: the site brings its widgets back on each scroll
+      const loop = () => { sweep(); requestAnimationFrame(loop); };
+      loop();
+      new MutationObserver(() => sweep()).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style"] });
+    });
+    // widgets that appear only once the page scrolls: scroll down and back first, so they come up and are
+    // hidden before the trim point instead of flashing in the recording
+    await page.evaluate(() => window.scrollTo({ top: 1500, behavior: "instant" }));
+    await page.waitForTimeout(1500);
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+    await page.waitForTimeout(1000);
+  }
+
+  if (args.hide) {
+    await page.evaluate((sel) => document.querySelectorAll(sel).forEach((e) => e.style.setProperty("display", "none", "important")), args.hide);
+    await page.waitForTimeout(500);
+  }
+
+  if (args.shot) {
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+    await page.waitForTimeout(500);
+    // each text's line boxes, from the text itself (first occurrence that is on the page), in css px
+    const boxes = await page.evaluate((qs) => {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const nodes = [], starts = [];
+      let text = "";
+      for (let n; (n = walker.nextNode());) { starts.push(text.length); nodes.push(n); text += n.data; }
+      const at = (k) => { let i = starts.length - 1; while (starts[i] > k) i--; return [nodes[i], k - starts[i]]; };
+      const out = {};
+      for (const q of qs) {
+        for (let k = text.indexOf(q); k >= 0; k = text.indexOf(q, k + 1)) {
+          const r = document.createRange();
+          r.setStart(...at(k));
+          const [en, eo] = at(k + q.length - 1);
+          r.setEnd(en, eo + 1);
+          const rects = [...r.getClientRects()].filter((c) => c.width > 1 && c.height > 1);
+          if (!rects.length) continue;
+          const lines = [];
+          for (const c of rects) {
+            const l = lines.find((l) => Math.abs(l.y - c.top) < c.height / 2);
+            if (l) { l.x = Math.min(l.x, c.left); l.x2 = Math.max(l.x2, c.right); l.b = Math.max(l.b, c.bottom); }
+            else lines.push({ x: c.left, y: c.top, x2: c.right, b: c.bottom });
+          }
+          out[q] = lines.map((l) => [l.x, l.y + window.scrollY, l.x2 - l.x, l.b - l.y]);
+          break;
+        }
+      }
+      return out;
+    }, args.marks);
+    const w = await page.evaluate(() => document.documentElement.clientWidth);
+    await page.screenshot({ path: args.shot, fullPage: true, clip: { x: 0, y: 0, width: w, height: args.height } });
+    const pad = 4, d = args.dpr;
+    const marks = Object.fromEntries(Object.entries(boxes).map(([q, ls]) => [q, ls.map(([x, y, bw, bh]) =>
+      [Math.round(x * d - pad), Math.round(y * d - pad), Math.round(bw * d + 2 * pad), Math.round(bh * d + 2 * pad)])]));
+    const { writeFile } = await import("node:fs/promises");
+    // written even when empty: an older one's boxes belong to an older shot, and older cuts import the file
+    if (args.marks.length) await writeFile(args.shot + ".marks.json", JSON.stringify(marks, null, 0));
+    const missing = args.marks.filter((q) => !marks[q]);
+    console.log(`${args.shot} (${w * d} px wide)${args.marks.length ? `, marks ${Object.keys(marks).length}/${args.marks.length}` : ""}${missing.length ? `; not on the page: ${missing.join(" | ")}` : ""}`);
+    await browser.close();
+    return;
   }
 
   // seconds of blank/loading footage at the front of the recording to trim —

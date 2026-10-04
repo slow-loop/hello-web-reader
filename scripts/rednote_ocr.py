@@ -47,13 +47,32 @@ def ocr_image(path: Path) -> str:
 
 
 def run(note_id: str) -> Path:
-    note_dir = BASE_DIR / note_id
+    p = Path(note_id)
+    if p.is_dir():
+        note_dir = p.resolve()
+        # deduce note_id from directory name or image names if needed
+        m = re.search(r"([0-9a-f]{24})", p.name)
+        actual_id = m.group(1) if m else p.name
+    else:
+        note_dir = BASE_DIR / note_id
+        actual_id = note_id
+
     if not note_dir.is_dir():
         raise SystemExit(f"no such note dir: {note_dir}")
 
-    images = ordered_images(note_dir, note_id)
+    images = ordered_images(note_dir, actual_id)
     if not images:
-        raise SystemExit(f"no images matching {note_id}_<n>.<ext> in {note_dir}")
+        # fallback: try matching any image with _n suffix
+        matches = []
+        for path in note_dir.iterdir():
+            m = re.match(r"^.+_(?P<n>\d+)\.(?:jpe?g|png|webp)$", path.name, re.IGNORECASE)
+            if m:
+                matches.append((int(m.group("n")), path))
+        matches.sort(key=lambda pair: pair[0])
+        images = [path for _, path in matches]
+
+    if not images:
+        raise SystemExit(f"no images matching {actual_id}_<n>.<ext> in {note_dir}")
 
     sections = []
     for path in images:
