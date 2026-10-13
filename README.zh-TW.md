@@ -167,6 +167,40 @@ result = await read_url("https://example.com", store=cache, cache_ttl=3600)
 
 ## OpenCLI 腳本
 
+### Twitter／X 帳號貼文
+
+`scripts/opencli_twitter.js` 重用本機 OpenCLI 的 BrowserBridge 與 Twitter 原生
+分頁／媒體解析工具。多帳號逐一抓取，共用一個 **headed、可見的 Chrome** adapter
+session（`site:twitter`，`foreground`、`persistent`、閒置保留 24 小時），結束或失敗
+都不關閉。切換帳號時記錄並檢查分頁 ID；通用 `browser` 指令是不同 surface，
+不能只靠相同 session 名稱判定分頁相同。
+
+```bash
+node scripts/opencli_twitter.js --index --accounts dotey,godofprompt --limit 20
+node scripts/opencli_twitter.js --list                         # 離線看清單
+node scripts/opencli_twitter.js --fetch <推文ID> [<推文ID>...]  # 原文＋圖片
+node scripts/opencli_twitter.js --fetch <推文ID> --video        # 加下載影片／GIF
+node --test tests/test_opencli_twitter.cjs
+```
+
+- `--limit` 是每帳號原始動態的上限：預設 20、最多 100，最多讀三頁；不捲動、
+  不為湊足篇數補抓。排除純轉推、回覆與置頂，保留原創及引用貼文。
+- 索引與 API 原始回應存 `output/twitter/_index/`；選中的貼文存
+  `output/twitter/<帳號>/<推文ID>/post.md`，附圖放同目錄 `assets/`。
+  原文不改寫，引用原文／圖片標示來源，不抓留言區。
+- 圖片逐張下載；影片／GIF 預設保留預覽圖與來源網址，`--video` 才下載
+  OpenCLI 解析出的 MP4，不保證最高畫質。
+- 保存外連與展開網址，必要時以 HEAD 解析 t.co；不自動抓外部文章全文。
+  全文另用 `uv run web-reader read <目的網址>`，X Article 另用原生 `twitter article`。
+- 分頁間隨機停 5–8 秒；帳號／貼文存檔間停 30–90 秒，每五次停 3–5 分鐘；
+  圖片與短網址請求間停 1–3 秒。冷卻時間跨次執行保留，腳本鎖避免重複啟動。
+  其他 OpenCLI 工作仍需自行避免同時操作同一瀏覽器。
+- 登入／驗證／API 錯誤立即停整批；媒體 401／403／429 也停止。
+  其他附件／連結失敗記錄為部分完成（exit 3），下次 `--fetch` 補抓。
+  文字先落檔，完整存過的略過。OpenCLI 升級後需重新做小批實測。
+
+### 其他共用慣例
+
 [`scripts/`](scripts/) 裡的 `opencli_*.js`（`opencli_ptt.js`、`opencli_ndltd.js`、`opencli_rednote_liked.js`）不屬於 `web-reader` CLI，
 用 OpenCLI 驅動真實瀏覽器，共同約定：
 

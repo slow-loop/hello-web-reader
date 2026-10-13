@@ -206,6 +206,7 @@ Standalone scripts in [`scripts/`](scripts/), not wired into the `web-reader` CL
 | `opencli_rednote_liked.js` | Index and fetch the signed-in rednote.com account's Like tab (needs OpenCLI + a logged-in controlled Chrome) |
 | `opencli_ndltd.js` | Search and fetch biblio + abstracts from NDLTD (臺灣博碩士論文知識加值系統), Taiwan's thesis/dissertation database (needs OpenCLI + a browser session past its CAPTCHA) |
 | `opencli_ptt.js` | Search a PTT board and fetch chosen threads (with pushes) as Markdown (needs OpenCLI; no login or CAPTCHA) |
+| `opencli_twitter.js` | Index one or more X accounts sequentially in one headed persistent OpenCLI adapter tab; archive selected original/quote posts with images, without replies |
 
 **Shared convention for the `opencli_*.js` browser scripts.** An agent only runs
 the script; the script drives one named OpenCLI browser session (`ptt`,
@@ -224,6 +225,42 @@ oc browser ptt close                # only when you really want it gone
 ```
 
 OpenCLI is an npm package (`~/.opencli`, run with `node`), not a `uvx` tool.
+
+Twitter uses OpenCLI's installed BrowserBridge and native Twitter adapter
+helpers, preserving link entities and reply flags that `twitter tweets` drops.
+It shares the adapter's `site:twitter` session with `surface: adapter`, explicitly
+`foreground`, `persistent`, and a 24-hour idle timeout. Generic `browser` commands
+use a different surface, so the same session name alone does not prove tab reuse.
+Account switches log and check the actual tab ID. The script never closes it.
+
+```bash
+node scripts/opencli_twitter.js --index --accounts dotey,godofprompt --limit 20
+node scripts/opencli_twitter.js --list
+node scripts/opencli_twitter.js --fetch <id> [<id>...]
+node scripts/opencli_twitter.js --fetch <id> --video
+node --test tests/test_opencli_twitter.cjs
+```
+
+`--limit` caps raw timeline items per account (default 20, maximum 100); filtering
+reposts and replies may leave fewer posts. Indexing stops after three cursor pages
+at most and never scrolls or refills to reach a filtered count. Originals and quote
+posts are retained, pinned posts excluded. Snapshots (including API payloads) land
+in `output/twitter/_index/`; selected posts in `output/twitter/<handle>/<id>/post.md`
+and `assets/`. Images and quote images download sequentially; video/GIF defaults
+to a poster + source URL, `--video` also downloads the adapter-selected MP4 variant.
+Expanded links are retained, unresolved t.co links resolved with HEAD; external
+articles are not fetched automatically. Use `web-reader read <destination>` separately.
+
+Pacing: random 5–8 seconds between cursor pages, 30–90 seconds between accounts
+or post archives, and 3–5 minutes after every fifth task across accounts/runs.
+Asset/link requests have a 1–3 second gap. A shared cooldown and process lock
+prevent this script from bursting on restart or running twice concurrently;
+other OpenCLI jobs must still avoid using the same browser concurrently.
+Login, verification and API errors stop the batch without retries. Media 401/403/429
+also stops; other incomplete assets/links are recorded and retried on the next fetch
+(exit 3 for partial archives). Text is saved before downloading media. Complete
+archives skip. This relies on installed OpenCLI helper APIs; after upgrading
+OpenCLI, repeat a small live check as well as the offline tests.
 
 
 Indexing and fetching are separate on purpose: building the index costs zero
