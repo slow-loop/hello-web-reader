@@ -6,6 +6,7 @@
  * Requires ~/.opencli, its connected browser bridge, and an X login.
  *
  * node scripts/opencli_twitter.js --index --accounts dotey,godofprompt --limit 20
+ * node scripts/opencli_twitter.js --index --accounts dotey --since 2026-08-01 --until 2026-09-01 --has-media --limit 20
  * node scripts/opencli_twitter.js --list                       # offline
  * node scripts/opencli_twitter.js --fetch <id> [<id>...]        # images included
  * node scripts/opencli_twitter.js --fetch <id> --video         # also video/GIF
@@ -14,6 +15,8 @@
  * output/twitter/<handle>/<id>/post.md + assets/
  * --limit counts raw timeline items, not retained originals. Max 100 items,
  * three cursor pages per account. No scroll, thread/reply fetch or auto-refill.
+ * With --since / --until, use OpenCLI search instead: limit counts search results.
+ * Dates are UTC, since inclusive / until exclusive; --has-media includes images/videos.
  * Links are preserved and t.co destinations resolved, not crawled for full text.
  * Partial assets are retried on the next --fetch. Existing complete files skip.
  * Shared pacing persists between runs; SIGINT leaves Chrome and completed files.
@@ -101,6 +104,17 @@ function parseTimeline(payload, account, seen, helpers) {
 
 function eligible(post, account) {
   return post.author.toLowerCase() === account && !post.is_retweet && !post.reply_to;
+}
+
+function validateSearchOptions(values) {
+  if (!values.since && !values.until && !values['has-media']) return;
+  if (!values.index || !values.since || !values.until) throw new Error('舊文搜尋請用 --index 並同時指定 --since、--until');
+  for (const date of [values.since, values.until]) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) {
+      throw new Error(`日期需為有效 YYYY-MM-DD：${date}`);
+    }
+  }
+  if (values.since >= values.until) throw new Error('--since 必須早於 --until（不含 until 當日）');
 }
 
 function acquireLock(base) {
@@ -191,6 +205,33 @@ async function indexAccounts(base, accounts, limit, pace) {
       const stamp = captured_at.replace(/[:.]/g, '-');
       writeJson(path.join(base, '_index', `${stamp}-${account}.json`), { account, captured_at, limit, stop_reason: reason, payloads, raw, posts });
       log(`@${account}：讀取 ${raw.length} 筆，保留 ${posts.length} 篇，停止原因 ${reason}`);
+    } finally { pace.after(); }
+  }
+}
+
+async function searchAccounts(base, accounts, limit, values, pace) {
+  const { page } = await loadOpencli();
+  await import(pathToFileURL(path.join(OPENCLI_DIR, 'clis/twitter/search.js')).href);
+  const { getRegistry } = await import(pathToFileURL(path.join(OPENCLI_DIR, 'dist/src/registry-api.js')).href);
+  const search = getRegistry().get('twitter/search');
+  const query = `since:${values.since} until:${values.until} -filter:replies -filter:nativeretweets`;
+  for (const account of accounts) {
+    await pace.before();
+    try {
+      const raw = await search.func(page, {
+        query, from: account, product: 'live', limit,
+        ...(values['has-media'] ? { has: 'media' } : {}),
+      });
+      const captured_at = new Date().toISOString();
+      const posts = raw.filter((post) => post.author.toLowerCase() === account
+        && Date.parse(post.created_at) >= Date.parse(values.since)
+        && Date.parse(post.created_at) < Date.parse(values.until))
+        .map((post) => ({ ...post, url: `https://x.com/${account}/status/${post.id}`, captured_at }));
+      const file = path.join(base, '_index', `${captured_at.replace(/[:.]/g, '-')}-${account}.json`);
+      writeJson(file, { account, captured_at, limit, mode: 'search', since: values.since, until: values.until,
+        has_media_only: Boolean(values['has-media']), query: `${query} from:${account}${values['has-media'] ? ' filter:media' : ''}`, raw, posts });
+      log(`@${account}：搜尋 ${raw.length} 筆，保留 ${posts.length} 篇`);
+      console.log(file);
     } finally { pace.after(); }
   }
 }
@@ -288,9 +329,11 @@ async function main() {
   const { values, positionals } = parseArgs({ options: {
     index: { type: 'boolean' }, list: { type: 'boolean' }, fetch: { type: 'boolean' },
     accounts: { type: 'string' }, limit: { type: 'string', default: '20' }, video: { type: 'boolean' }, help: { type: 'boolean' },
+    since: { type: 'string' }, until: { type: 'string' }, 'has-media': { type: 'boolean' },
   }, allowPositionals: true });
   if (values.help) { console.log(fs.readFileSync(__filename, 'utf8').split(' */')[0].replace(/^.*\/\*\*\n/s, '').replace(/^ \* ?/gm, '')); return; }
   if ([values.index, values.list, values.fetch].filter(Boolean).length > 1) throw new Error('--index、--list、--fetch 請分開執行');
+  validateSearchOptions(values);
   const limit = Number(values.limit);
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('--limit 必須介於 1–100');
   if (values.accounts && !values.index) throw new Error('--accounts 只用於 --index');
@@ -306,10 +349,11 @@ async function main() {
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { log('已中斷，保留瀏覽器與已完成資料'); process.exit(signal === 'SIGINT' ? 130 : 143); });
   try {
     const pace = pacer(BASE_DIR);
-    if (values.index) await indexAccounts(BASE_DIR, accounts, limit, pace);
+    if (values.index && values.since) await searchAccounts(BASE_DIR, accounts, limit, values, pace);
+    else if (values.index) await indexAccounts(BASE_DIR, accounts, limit, pace);
     else await fetchPosts(BASE_DIR, positionals, Boolean(values.video), pace);
   } finally { release(); }
 }
 
-module.exports = { normalizeAccount, parseTimeline, eligible, mediaTasks, markdown, pacer, acquireLock };
+module.exports = { normalizeAccount, parseTimeline, eligible, mediaTasks, markdown, pacer, acquireLock, validateSearchOptions };
 if (require.main === module) main().catch((error) => { log(error.message); process.exitCode = 1; });
