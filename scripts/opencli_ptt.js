@@ -88,8 +88,13 @@ function browserEval(js) {
   }
   const start = res.stdout.search(/[{[]/);
   try {
-    return JSON.parse(res.stdout.slice(start));
-  } catch {
+    const parsed = JSON.parse(res.stdout.slice(start));
+    if (parsed && parsed.ok === false) {
+      throw new Error(`browser eval error: ${JSON.stringify(parsed.error)}`);
+    }
+    return (parsed && typeof parsed === 'object' && 'data' in parsed) ? parsed.data : parsed;
+  } catch (err) {
+    if (err.message.startsWith('browser eval error:')) throw err;
     throw new Error(`browser eval returned invalid JSON: ${res.stdout.slice(0, 500)}`);
   }
 }
