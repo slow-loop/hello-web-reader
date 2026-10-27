@@ -82,7 +82,7 @@ function opencli(args) {
 // returns an object. stdout also carries an "Update available" banner on some
 // runs — parse from the first brace.
 function browserEval(js) {
-  const res = opencli(['browser', BROWSER_SESSION, 'eval', js]);
+  const res = opencli(['browser', '--session', BROWSER_SESSION, 'eval', js]);
   if (res.status !== 0) {
     throw new Error(`browser eval failed: ${(res.stderr || res.stdout || '').trim()}`);
   }
@@ -100,11 +100,11 @@ function browserEval(js) {
 }
 
 function browserWait(seconds) {
-  opencli(['browser', BROWSER_SESSION, 'wait', 'time', String(seconds)]);
+  opencli(['browser', '--session', BROWSER_SESSION, 'wait', 'time', String(seconds)]);
 }
 
 function browserOpen(url) {
-  const res = opencli(['browser', BROWSER_SESSION, 'open', url]);
+  const res = opencli(['browser', '--session', BROWSER_SESSION, 'open', url]);
   if (res.status !== 0) {
     throw new Error(`could not open ${url}: ${(res.stderr || '').trim()}`);
   }
@@ -123,7 +123,7 @@ function passOver18(url) {
   log('over-18 gate — acknowledging it');
   browserEval(`(() => { document.querySelector('button[name="yes"]')?.click(); return {}; })()`);
   browserWait(1.5);
-  const res = opencli(['browser', BROWSER_SESSION, 'open', url]);
+  const res = opencli(['browser', '--session', BROWSER_SESSION, 'open', url]);
   if (res.status !== 0) throw new Error(`could not re-open ${url}: ${(res.stderr || '').trim()}`);
   browserWait(1.5);
 }
