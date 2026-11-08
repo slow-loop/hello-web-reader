@@ -213,7 +213,7 @@ async function main() {
 
   if (args.clean) {
     await page.evaluate(() => {
-      const ad = /(^|[-_ ])(ad|ads|adv|advert|advertisement|sponsor|sponsored|taboola|outbrain|dfp|gpt)([-_ 0-9]|$)/i;
+      const ad = /(^|[-_ ])(ad|ads|adv|advert|advertisement|sponsor|sponsored|taboola|trc|outbrain|dfp|gpt)([-_ 0-9]|$)/i;
       // into shadow roots too: floating widgets (summary bars, chat buttons) often live in one
       const sweep = (root = document.body) => root.querySelectorAll("*").forEach((el) => {
         if (el.shadowRoot) sweep(el.shadowRoot);
@@ -234,6 +234,14 @@ async function main() {
     await page.waitForTimeout(1500);
     await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
     await page.waitForTimeout(1000);
+    // an ad slot keeps its reserved height after its ad is hidden, leaving a big blank: drop boxes that show nothing
+    await page.evaluate(() => {
+      const shows = (el) => el.innerText.trim() || el.querySelector("img, video, svg, canvas, picture") || getComputedStyle(el).backgroundImage !== "none";
+      document.querySelectorAll("body *").forEach((el) => {
+        if (el.offsetHeight > 40 && !el.matches("img, video, svg, canvas, picture") && !shows(el)) el.style.setProperty("display", "none", "important");
+      });
+    });
+    await page.waitForTimeout(500);
   }
 
   if (args.hide) {
