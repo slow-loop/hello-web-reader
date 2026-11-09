@@ -167,6 +167,23 @@ result = await read_url("https://example.com", store=cache, cache_ttl=3600)
 
 ## OpenCLI 腳本
 
+### Threads 帳號貼文
+
+`scripts/opencli_threads.js` 移植自 hello-browser-reader 的 Threads 抓取（貼文格式、GraphQL
+過濾、翻頁節奏都一樣，見該 repo 的 `notes/2026-06-04-site-capture.md`）。共用 `site:threads`
+adapter session，不關分頁；需要該 Chrome 已登入 Threads，且視窗可見（背景分頁不會載入下一頁）。
+
+```bash
+node scripts/opencli_threads.js @wbfw_gw https://www.threads.com/@3laziaga44 --limit 10
+node scripts/opencli_threads.js wbfw_gw --out ../hello-marketing/gallery/<sample>/clippings
+```
+
+- 首批來自頁面內嵌 JSON（約 4–6 篇），不夠就照人的節奏往下捲，最多 3 頁（每頁約 9 篇），
+  遇到 GraphQL 錯誤或登入頁就停。帳號之間隔 30–90 秒，跨次執行保留。
+- `<out>/<帳號>/index.json` 是讀到的全部貼文；最新 `--limit` 篇（預設 10、最多 30）存成
+  `<out>/<帳號>/<code>/post.md`，圖片在 `assets/`。Meta CDN 網址會過期，所以當場下載。
+  影片只存封面，不抓留言。
+
 ### Twitter／X 帳號貼文
 
 `scripts/opencli_twitter.js` 重用本機 OpenCLI 的 BrowserBridge 與 Twitter 原生
