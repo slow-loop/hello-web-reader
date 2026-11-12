@@ -167,7 +167,7 @@ result = await read_url("https://example.com", store=cache, cache_ttl=3600)
 
 ## OpenCLI 腳本
 
-### Threads 帳號貼文
+### Threads 帳號、搜尋、首頁、單則貼文
 
 `scripts/opencli_threads.js` 移植自 hello-browser-reader 的 Threads 抓取（貼文格式、GraphQL
 過濾、翻頁節奏都一樣，見該 repo 的 `notes/2026-06-04-site-capture.md`）。共用 `site:threads`
@@ -175,14 +175,19 @@ adapter session，不關分頁；需要該 Chrome 已登入 Threads，且視窗�
 
 ```bash
 node scripts/opencli_threads.js @wbfw_gw https://www.threads.com/@3laziaga44 --limit 10
-node scripts/opencli_threads.js wbfw_gw --out ../hello-marketing/gallery/<sample>/clippings
+node scripts/opencli_threads.js --search 排名表 --search 分級表 --home --limit 30
+node scripts/opencli_threads.js https://www.threads.com/@wbfw_gw/post/DfeEi-skx0X --video --limit 10
 ```
 
-- 首批來自頁面內嵌 JSON（約 4–6 篇），不夠就照人的節奏往下捲，最多 3 頁（每頁約 9 篇），
-  遇到 GraphQL 錯誤或登入頁就停。帳號之間隔 30–90 秒，跨次執行保留。
-- `<out>/<帳號>/index.json` 是讀到的全部貼文；最新 `--limit` 篇（預設 10、最多 30）存成
+- 首批來自頁面內嵌 JSON（帳號頁約 4–6 篇、搜尋約 20 篇、首頁約 6 篇），不夠就照人的節奏往下捲，
+  最多 3 頁，遇到 GraphQL 錯誤或登入頁就停。頁面之間隔 30–90 秒，跨次執行保留。
+- **帳號**：`<out>/<帳號>/index.json` 是讀到的全部貼文；最新 `--limit` 篇（預設 10、最多 30）存成
   `<out>/<帳號>/<code>/post.md`，圖片在 `assets/`。Meta CDN 網址會過期，所以當場下載。
-  影片只存封面，不抓留言。
+- **搜尋、首頁**：只寫索引 `<out>/_index/search-<關鍵字>-<時間>.json`、`home-<時間>.json`，
+  任何作者都收，含讚、留言、轉發、圖片和影片網址，不下載。從索引挑了再丟單則網址。
+- **單則貼文**：存 `<out>/<作者>/<code>/post.md`，含圖片和頁面上最多 `--limit` 則留言
+  （作者自己的接續段也在裡面）。`--video` 才下載影片，否則只有封面。
+- 熱門話題（搜尋頁的 Trending now）抓得到，但都是時事，沒有做成指令。
 
 ### Twitter／X 帳號貼文
 

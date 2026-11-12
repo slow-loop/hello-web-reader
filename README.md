@@ -207,7 +207,7 @@ Standalone scripts in [`scripts/`](scripts/), not wired into the `web-reader` CL
 | `opencli_ndltd.js` | Search and fetch biblio + abstracts from NDLTD (臺灣博碩士論文知識加值系統), Taiwan's thesis/dissertation database (needs OpenCLI + a browser session past its CAPTCHA) |
 | `opencli_ptt.js` | Search a PTT board and fetch chosen threads (with pushes) as Markdown (needs OpenCLI; no login or CAPTCHA) |
 | `opencli_twitter.js` | Index one or more X accounts sequentially in one headed persistent OpenCLI adapter tab; archive selected original/quote posts with images, without replies |
-| `opencli_threads.js` | Read one or more Threads profiles (embedded first batch + up to 3 paced scroll pages via an in-page GraphQL hook) and save the newest N posts with images, without replies (needs OpenCLI + a Threads login) |
+| `opencli_threads.js` | Threads profiles (save the newest N posts with images), search (`--search`) and home feed (`--home`) as an index only, and single post URLs with media and replies (`--video` downloads video). Embedded first batch + up to 3 paced scroll pages via an in-page GraphQL hook (needs OpenCLI + a Threads login) |
 
 **Shared convention for the `opencli_*.js` browser scripts.** An agent only runs
 the script; the script drives one named OpenCLI browser session (`ptt`,
