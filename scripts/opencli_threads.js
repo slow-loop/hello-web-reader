@@ -331,7 +331,7 @@ async function main() {
   ];
   const out = path.resolve(values.out || path.join(__dirname, '..', 'output', 'threads'));
   const { BrowserBridge } = await import(pathToFileURL(path.join(OPENCLI_DIR, 'dist/src/browser/bridge.js')).href);
-  const page = await new BrowserBridge().connect({ session: SESSION, surface: 'adapter', siteSession: 'persistent', windowMode: 'background', idleTimeout: 86400 });
+  const page = await new BrowserBridge().connect({ session: SESSION, surface: 'adapter', siteSession: 'persistent', windowMode: process.env.OPENCLI_WINDOW || 'background', idleTimeout: 86400 });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { log('已中斷，保留瀏覽器與已完成資料'); process.exit(signal === 'SIGINT' ? 130 : 143); });
   const pace = pacer(path.join(__dirname, '..', 'output', 'threads'));
   const run = { profile: captureProfile, feed: captureFeed, post: capturePost };
