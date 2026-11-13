@@ -18,10 +18,11 @@
  * Search and home only index (text, counts, media URLs). Pick from the index, then pass the chosen
  * post URLs to save them: images are downloaded right away (Meta's CDN URLs expire); videos only
  * with --video, otherwise the cover image stands in.
- * Default <out> is output/threads. First batch comes from the page's embedded JSON; more needs
- * scrolling, which this does at most 3 times, the way a reader would, and stops on any GraphQL
- * error or login wall. Keep the Chrome window visible: a hidden tab stops loading.
- * Pacing between pages persists between runs; SIGINT leaves Chrome and completed files.
+ * Default <out> is output/threads. First batch comes from the page's embedded JSON; each next page
+ * is the same GraphQL query the page sends when you scroll, sent through the page's own Relay
+ * network with the cursor, 3–6 s apart. No scrolling, so the tab can stay hidden, covered or on
+ * another Space. Stops with an error on any GraphQL error, login wall or changed query shape.
+ * Pacing between runs persists; SIGINT leaves Chrome and completed files.
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -31,7 +32,7 @@ const { parseArgs } = require('node:util');
 
 const OPENCLI_DIR = path.join(os.homedir(), '.opencli/node_modules/@jackwener/opencli');
 const SESSION = 'site:threads';
-const PACING = { rounds: 3, responseWaitMs: 6000, waitMin: 3, waitMax: 6, budgetMs: 40000 };
+const PACING = { maxPages: 10, waitMin: 3, waitMax: 6 };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const randomMs = (min, max) => Math.round((min + Math.random() * (max - min)) * 1000);
 const log = (msg) => process.stderr.write(`[${new Date().toISOString()}] ${msg}\n`);
@@ -69,35 +70,56 @@ function normalizeTarget(value) {
   return { kind: 'profile', account, url: `https://www.threads.com/@${account}` };
 }
 
-// In-page: patch XHR/fetch to keep GraphQL responses (the filter is threads-bridge.ts's
-// SKIP list; KEEP is left open because profile pagination's friendly name is unverified).
-const HOOK = `() => {
-  if (window.__hrThreads) return true;
-  const st = window.__hrThreads = { blobs: [], failures: 0 };
-  const SKIP = /Count|Badge|Hovercard|Mention|Emoji|Nullstate/;
-  const fromBody = (b) => { const m = typeof b === 'string' && b.match(/(?:^|&)fb_api_req_friendly_name=([^&]*)/); return m ? decodeURIComponent(m[1]) : undefined; };
-  const record = (name, text) => {
-    if (!name || SKIP.test(name) || st.blobs.length >= 150) return;
-    try { st.blobs.push(JSON.parse(text)); return; } catch {}
-    for (const line of text.split('\\n')) { try { if (line.trim()) st.blobs.push(JSON.parse(line)); } catch {} }
+// Next pages: the query each page type sends when scrolled, the preloaded query whose embedded
+// result holds the first cursor, where the connection sits in both, and the next request's variables.
+const PAGERS = {
+  profile: { query: 'BarcelonaProfileThreadsTabRefetchableDirectQuery', preloader: 'BarcelonaProfileThreadsTabDirectQuery', path: 'mediaData',
+    vars: (pre, after) => ({ ...pre, after, before: null, first: 10, last: null }) },
+  home: { query: 'BarcelonaFeedPaginationDirectQuery', preloader: 'BarcelonaFeedDirectQuery', path: 'feedData',
+    vars: (pre, after) => ({ ...pre, data: { ...pre.data, reason: 'pagination' }, after, before: null, first: 10, last: null }) },
+  search: { query: 'BarcelonaSearchResultsRefetchableQuery', preloader: 'BarcelonaSearchResultsQuery', path: 'searchResults',
+    vars: (pre, after) => ({ ...pre, after, first: 10 }) },
+  post: { query: 'BarcelonaPostPageDirectRepliesRefetchQuery', preloader: 'BarcelonaPostPageDownwardQuery', path: 'media.text_post_app_info.direct_replies',
+    vars: (pre, after) => ({ filterType: null, ...pre, after, first: 10 }) },
+};
+
+// In-page: the preloaded query's variables and its connection's page_info, from the embedded JSON.
+const FIRST_PAGE = (spec) => `() => {
+  const pre = ${JSON.stringify(spec.preloader)}, path = ${JSON.stringify(spec.path)};
+  let variables, data;
+  const walk = (o) => {
+    if (!o || typeof o !== 'object') return;
+    if (Array.isArray(o.expectedPreloaders)) for (const p of o.expectedPreloaders) if (p.queryName === pre && !variables) variables = p.variables;
+    if (Array.isArray(o) && typeof o[0] === 'string' && o[0].startsWith('adp_' + pre + 'RelayPreloader_') && o[1]?.__bbox?.result?.data && !data) data = o[1].__bbox.result.data;
+    for (const v of Object.values(o)) walk(v);
   };
-  const P = XMLHttpRequest.prototype, open = P.open, setH = P.setRequestHeader, send = P.send;
-  P.open = function (m, u, ...r) { this.__u = String(u); this.__n = undefined; return open.call(this, m, u, ...r); };
-  P.setRequestHeader = function (n, v) { if (n.toLowerCase() === 'x-fb-friendly-name') this.__n = v; return setH.call(this, n, v); };
-  P.send = function (body) {
-    if (/graphql/.test(this.__u || '')) {
-      const name = this.__n || fromBody(body);
-      this.addEventListener('load', () => {
-        try {
-          if (this.status >= 400) { st.failures++; return; }
-          if (this.status === 200 && (this.responseType === '' || this.responseType === 'text')) record(name, this.responseText);
-        } catch {}
-      });
-    }
-    return send.call(this, body);
-  };
-  return true;
+  for (const s of document.querySelectorAll('script[type="application/json"][data-sjs]')) { try { walk(JSON.parse(s.textContent)); } catch {} }
+  if (!variables) return { error: '找不到 ' + pre + ' 的變數' };
+  const conn = path.split('.').reduce((x, k) => x?.[k], data);
+  if (!conn?.page_info) return { error: '找不到 ' + pre + ' 的 ' + path + '.page_info' };
+  return { variables: Object.fromEntries(Object.entries(variables).filter(([k]) => !k.startsWith('__relay_internal__'))), page_info: conn.page_info };
 }`;
+
+// In-page: send one page through the page's own Relay network, so the request is the app's own.
+const NEXT_PAGE = (spec, variables) => `() => new Promise((resolve) => {
+  const name = ${JSON.stringify(spec.query)}, path = ${JSON.stringify(spec.path)};
+  let q, env;
+  try { q = window.require(name + '.threads.graphql').params; env = window.require('BarcelonaRelayEnvironment'); } catch (e) { resolve({ error: '找不到 ' + name + '：' + e.message }); return; }
+  if (!q?.id || typeof env?.getNetwork !== 'function') { resolve({ error: name + ' 不是預期的查詢' }); return; }
+  const provided = Object.fromEntries(Object.entries(q.providedVariables || {}).map(([k, v]) => [k, v.get()]));
+  const payloads = [];
+  env.getNetwork().execute(q, { ...${JSON.stringify(variables)}, ...provided }, { force: true }).subscribe({
+    next: (p) => payloads.push(p),
+    error: (e) => resolve({ error: 'GraphQL 失敗：' + String(e?.message || e).slice(0, 300) }),
+    complete: () => {
+      const errors = payloads.flatMap((p) => p.errors || []);
+      if (errors.length) { resolve({ error: 'GraphQL 錯誤：' + (errors[0].message || JSON.stringify(errors[0])).slice(0, 300) }); return; }
+      const conn = payloads.map((p) => path.split('.').reduce((x, k) => x?.[k], p.data)).find(Boolean);
+      if (!conn?.page_info || !Array.isArray(conn.edges)) { resolve({ error: name + ' 回應沒有 ' + path }); return; }
+      resolve({ page_info: conn.page_info, payloads });
+    },
+  });
+})`;
 
 const EMBEDDED = `() => [...document.querySelectorAll('script[type="application/json"][data-sjs]')]
   .map((s) => { try { return JSON.parse(s.textContent); } catch { return null; } }).filter(Boolean)`;
@@ -133,35 +155,26 @@ function collectPosts(roots, account, into = new Map()) {
   return into;
 }
 
-async function loadMore(page, account, posts, limit) {
-  const started = Date.now();
-  const state = () => page.evaluate(`() => ({ n: window.__hrThreads.blobs.length, failures: window.__hrThreads.failures,
-    hidden: document.hidden || innerHeight === 0, login: /^\\/(login|accounts)/.test(location.pathname),
-    bottom: scrollY + innerHeight >= document.documentElement.scrollHeight - 80 })`);
-  let s = await state();
-  const baseFailures = s.failures;
-  for (let round = 0; round < PACING.rounds && posts.size < limit; round += 1) {
-    if (s.failures > baseFailures || s.login) return 'blocked';
-    if (s.hidden) return 'hidden';
-    if (Date.now() - started > PACING.budgetMs) return 'budget';
-    // A few uneven strokes to the end, not one jump.
-    const strokes = 2 + Math.floor(Math.random() * 3);
-    for (let i = 1; i <= strokes; i += 1) {
-      await page.evaluate(`() => { const from = scrollY, to = Math.max(document.documentElement.scrollHeight - innerHeight, from); scrollTo(0, from + (to - from) * ${i} / ${strokes}); }`);
-      await sleep(120 + Math.random() * 200);
-    }
-    const before = s.n, deadline = Date.now() + PACING.responseWaitMs;
-    do { await sleep(400); s = await state(); } while (s.n === before && Date.now() < deadline);
-    if (s.n === before) return s.bottom ? 'end' : 'quiet';
-    const blobs = await page.evaluate(`() => window.__hrThreads.blobs.slice(${before})`);
-    const had = posts.size;
-    collectPosts(blobs, account, posts);
-    log(`第 ${round + 1} 頁：+${posts.size - had} 篇`);
-    // Step back up so the end-of-list marker leaves view; otherwise Threads chains pages.
-    await page.evaluate(`() => scrollBy(0, -Math.round(innerHeight * 1.5))`);
+// kind: a PAGERS key. Throws when the query or response no longer has the expected shape, so a
+// changed Threads never passes for a short list.
+async function loadMore(page, kind, account, posts, limit) {
+  const spec = PAGERS[kind];
+  const first = await page.evaluate(FIRST_PAGE(spec));
+  if (first.error) throw new Error(`Threads 分頁格式變了：${first.error}`);
+  let pageInfo = first.page_info;
+  for (let n = 1; posts.size < limit; n += 1) {
+    if (!pageInfo.has_next_page) return 'end';
+    if (!pageInfo.end_cursor) throw new Error(`Threads 分頁格式變了：${spec.path} 有下一頁但沒有 end_cursor`);
+    if (n > PACING.maxPages) return 'pages';
     await sleep(randomMs(PACING.waitMin, PACING.waitMax));
+    const next = await page.evaluate(NEXT_PAGE(spec, spec.vars(first.variables, pageInfo.end_cursor)));
+    if (next.error) throw new Error(next.error);
+    const had = posts.size;
+    collectPosts(next.payloads, account, posts);
+    log(`第 ${n} 頁：+${posts.size - had} 篇`);
+    pageInfo = next.page_info;
   }
-  return posts.size >= limit ? 'limit' : 'rounds';
+  return 'limit';
 }
 
 async function download(url, dest, kind = 'image') {
@@ -214,7 +227,6 @@ async function open(page, url) {
   await sleep(randomMs(3, 6));
   const wall = await page.evaluate(`() => ({ url: location.href })`);
   if (/\/(login|accounts)/.test(new URL(wall.url).pathname)) throw new Error('登入頁，請在該 Chrome 登入 Threads 後重跑');
-  await page.evaluate(HOOK);
   return page.evaluate(EMBEDDED);
 }
 
@@ -222,7 +234,7 @@ async function captureProfile(page, { account, url }, limit, out, withVideo) {
   const posts = collectPosts(await open(page, url), account);
   log(`@${account} 首批 ${posts.size} 篇`);
   if (!posts.size) throw new Error('頁面沒有貼文資料（未登入、帳號不存在或私人帳號）');
-  const reason = posts.size >= limit ? 'limit' : await loadMore(page, account, posts, limit);
+  const reason = posts.size >= limit ? 'limit' : await loadMore(page, 'profile', account, posts, limit);
   const captured_at = new Date().toISOString();
   const all = [...posts.values()].sort((a, b) => b.published_at.localeCompare(a.published_at));
   const base = path.join(out, account);
@@ -238,14 +250,15 @@ async function captureProfile(page, { account, url }, limit, out, withVideo) {
 
 // Search and home: every author, page order kept, index only.
 async function captureFeed(page, { name, url, query }, limit, out) {
+  const kind = query === undefined ? 'home' : 'search';
   const posts = collectPosts(await open(page, url), null);
   log(`${name} 首批 ${posts.size} 篇`);
   if (!posts.size) throw new Error('頁面沒有貼文資料（未登入或沒有結果）');
-  const reason = posts.size >= limit ? 'limit' : await loadMore(page, null, posts, limit);
+  const reason = posts.size >= limit ? 'limit' : await loadMore(page, kind, null, posts, limit);
   const captured_at = new Date().toISOString();
   const stamp = captured_at.slice(0, 16).replace(/[-:T]/g, '');
   const file = path.join(out, '_index', `${name.replace(/[\\/:*?"<>|\s]+/g, '_')}-${stamp}.json`);
-  writeJson(file, { kind: query === undefined ? 'home' : 'search', query, source: url, captured_at, stop_reason: reason, posts: [...posts.values()] });
+  writeJson(file, { kind, query, source: url, captured_at, stop_reason: reason, posts: [...posts.values()] });
   log(`${name}：讀到 ${posts.size} 篇，停止原因 ${reason} → ${file}`);
   console.log(file);
 }
@@ -278,7 +291,7 @@ function joinThread(post, parts) {
 async function capturePost(page, { author, code, url }, limit, out, withVideo) {
   const posts = collectPosts(await open(page, url), null);
   if (!posts.has(code)) throw new Error('頁面沒有這則貼文（已刪除、私人帳號或未登入）');
-  const reason = posts.size - 1 >= limit ? 'limit' : await loadMore(page, null, posts, limit + 1);
+  const reason = posts.size - 1 >= limit ? 'limit' : await loadMore(page, 'post', null, posts, limit + 1);
   const parts = await threadParts(page, posts.get(code));
   const captured_at = new Date().toISOString();
   const post = joinThread(posts.get(code), parts);
@@ -318,7 +331,7 @@ async function main() {
   ];
   const out = path.resolve(values.out || path.join(__dirname, '..', 'output', 'threads'));
   const { BrowserBridge } = await import(pathToFileURL(path.join(OPENCLI_DIR, 'dist/src/browser/bridge.js')).href);
-  const page = await new BrowserBridge().connect({ session: SESSION, surface: 'adapter', siteSession: 'persistent', windowMode: 'foreground', idleTimeout: 86400 });
+  const page = await new BrowserBridge().connect({ session: SESSION, surface: 'adapter', siteSession: 'persistent', windowMode: 'background', idleTimeout: 86400 });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { log('已中斷，保留瀏覽器與已完成資料'); process.exit(signal === 'SIGINT' ? 130 : 143); });
   const pace = pacer(path.join(__dirname, '..', 'output', 'threads'));
   const run = { profile: captureProfile, feed: captureFeed, post: capturePost };
