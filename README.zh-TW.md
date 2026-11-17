@@ -183,6 +183,7 @@ node scripts/opencli_threads.js https://www.threads.com/@wbfw_gw/post/DfeEi-skx0
   最多 3 頁，遇到 GraphQL 錯誤或登入頁就停。頁面之間隔 30–90 秒，跨次執行保留。
 - **帳號**：`<out>/<帳號>/index.json` 是讀到的全部貼文；最新 `--limit` 篇（預設 10、最多 30）存成
   `<out>/<帳號>/<code>/post.md`，圖片在 `assets/`。Meta CDN 網址會過期，所以當場下載。
+  帳號門面另存 `<out>/<帳號>/profile.json`（名稱、簡介、粉絲數、簡介連結、是否認證）和 `avatar.jpg`。
 - **搜尋、首頁**：只寫索引 `<out>/_index/search-<關鍵字>-<時間>.json`、`home-<時間>.json`，
   任何作者都收，含讚、留言、轉發、圖片和影片網址，不下載。從索引挑了再丟單則網址。
 - **單則貼文**：存 `<out>/<作者>/<code>/post.md`，含圖片和頁面上最多 `--limit` 則留言

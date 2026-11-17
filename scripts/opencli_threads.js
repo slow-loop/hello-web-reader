@@ -12,6 +12,7 @@
  * node scripts/opencli_threads.js https://www.threads.com/@wbfw_gw/post/DfeEi-skx0X --video
  *
  * Profile  <out>/<handle>/index.json + <out>/<handle>/<code>/post.md   newest --limit posts by that account
+ *          <out>/<handle>/profile.json + avatar.jpg                    name, bio, followers, links, avatar
  * Search   <out>/_index/search-<query>-<stamp>.json                   every post read, any author; nothing downloaded
  * Home     <out>/_index/home-<stamp>.json                             same, from the logged-in "For you" feed
  * Post     <out>/<author>/<code>/post.md + assets/                    the post, its media, and up to --limit replies
@@ -230,8 +231,45 @@ async function open(page, url) {
   return page.evaluate(EMBEDDED);
 }
 
+// The profile header (name, bio, followers, links, avatar) is the page's own user object: the one
+// with this username that carries a biography. Posts carry a smaller user object without it.
+function findProfile(roots, account) {
+  let found;
+  const visit = (o) => {
+    if (found || !o || typeof o !== 'object') return;
+    if (!Array.isArray(o) && o.username?.toLowerCase?.() === account && 'biography' in o && 'follower_count' in o) { found = o; return; }
+    for (const v of Object.values(o)) if (v && typeof v === 'object') visit(v);
+  };
+  visit(roots);
+  if (!found) return null;
+  let avatar;
+  for (const c of found.hd_profile_pic_versions || []) if (c?.url && (!avatar || (c.width || 0) > (avatar.width || 0))) avatar = c;
+  return {
+    account, url: `https://www.threads.com/@${account}`, name: found.full_name || '', bio: found.biography || '',
+    followers: found.follower_count ?? null, verified: !!found.is_verified,
+    links: (found.bio_links || []).map((l) => l?.url).filter(Boolean),
+    avatar_url: avatar?.url || found.profile_pic_url || null,
+  };
+}
+
+async function saveProfile(base, profile, captured_at) {
+  fs.mkdirSync(base, { recursive: true });
+  let avatar = null;
+  if (profile.avatar_url) {
+    try { await download(profile.avatar_url, path.join(base, 'avatar.jpg')); avatar = 'avatar.jpg'; }
+    catch (error) { if (/停止批次/.test(error.message)) throw error; log(`頭像下載失敗：${error.message}`); }
+  }
+  const { avatar_url, ...rest } = profile;
+  writeJson(path.join(base, 'profile.json'), { ...rest, avatar, captured_at });
+}
+
 async function captureProfile(page, { account, url }, limit, out, withVideo) {
-  const posts = collectPosts(await open(page, url), account);
+  const roots = await open(page, url);
+  const profile = findProfile(roots, account);
+  if (!profile) throw new Error('頁面沒有帳號資料（未登入、帳號不存在，或 Threads 格式變了）');
+  await saveProfile(path.join(out, account), profile, new Date().toISOString());
+  log(`@${account}：${profile.name}，${profile.followers} 粉絲`);
+  const posts = collectPosts(roots, account);
   log(`@${account} 首批 ${posts.size} 篇`);
   if (!posts.size) throw new Error('頁面沒有貼文資料（未登入、帳號不存在或私人帳號）');
   const reason = posts.size >= limit ? 'limit' : await loadMore(page, 'profile', account, posts, limit);
@@ -341,5 +379,5 @@ async function main() {
   }
 }
 
-module.exports = { normalizeAccount, normalizeTarget, collectPosts, markdown };
+module.exports = { normalizeAccount, normalizeTarget, collectPosts, findProfile, markdown };
 if (require.main === module) main().catch((error) => { log(error.message); process.exitCode = 1; });
