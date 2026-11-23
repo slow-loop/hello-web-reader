@@ -142,12 +142,23 @@ function collectPosts(roots, account, into = new Map()) {
       const items = Array.isArray(o.carousel_media) && o.carousel_media.length ? o.carousel_media : [o];
       const t = o.text_post_app_info || {};
       const videos = [...new Set(items.map(video).filter(Boolean))];
+      // Inline GIF stickers sit in the text as a placeholder character; rebuild the text from its
+      // fragments with a [貼圖] marker there, and keep the sticker URLs in the same order.
+      const frags = t.text_fragments?.fragments || [];
+      const stickers = frags.filter((f) => f?.fragment_type === 'inline_sticker').map((f) => f.inline_sticker_fragment?.sticker_url).filter(Boolean);
+      const text = stickers.length ? frags.map((f) => (f.fragment_type === 'inline_sticker' ? '[貼圖]' : f.plaintext || '')).join('') : o.caption?.text || '';
+      const like = t.custom_like;
       into.set(o.code, {
-        code: o.code, author, url: `https://www.threads.com/@${author}/post/${o.code}`,
-        text: o.caption?.text || '', published_at: new Date(o.taken_at * 1000).toISOString(),
+        code: o.code, pk: o.pk != null ? String(o.pk) : null, author, url: `https://www.threads.com/@${author}/post/${o.code}`,
+        text, published_at: new Date(o.taken_at * 1000).toISOString(),
         likes: o.like_count ?? null, replies: t.direct_reply_count ?? null, reposts: t.repost_count ?? null, quotes: t.quote_count ?? null,
         images: [...new Set(items.map(best).filter(Boolean))], has_video: videos.length > 0, videos,
         thread_length: t.self_thread_info?.self_thread_length || 1,
+        stickers,
+        // The like button replaced by a GIF sticker or an emoji (Threads' custom like).
+        custom_like: like?.sticker_url ? { gif: like.sticker_url } : like?.emoji ? { emoji: like.emoji } : null,
+        // A reply: the post it answers (pk) and that post's author.
+        reply_to: t.is_reply && t.reply_to_post_id ? { pk: String(t.reply_to_post_id), author: t.reply_to_author?.username || null } : null,
       });
     }
     for (const v of Object.values(o)) if (v && typeof v === 'object') visit(v);
@@ -180,7 +191,7 @@ async function loadMore(page, kind, account, posts, limit) {
 
 async function download(url, dest, kind = 'image') {
   const host = new URL(url).hostname;
-  if (!/(\.|^)(fbcdn\.net|cdninstagram\.com)$/.test(host)) throw new Error(`未知媒體來源 ${host}`);
+  if (!/(\.|^)(fbcdn\.net|cdninstagram\.com|giphy\.com)$/.test(host)) throw new Error(`未知媒體來源 ${host}`);
   const response = await fetch(url, { signal: AbortSignal.timeout(kind === 'video' ? 180000 : 60000) });
   if ([401, 403, 429].includes(response.status)) throw new Error(`媒體 HTTP ${response.status}，停止批次`);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -190,16 +201,28 @@ async function download(url, dest, kind = 'image') {
   fs.renameSync(`${dest}.part`, dest);
 }
 
-function markdown(post, captured_at, media, replies = []) {
+// parent: the post this one replies to, when it is on the page (else only post.reply_to is known).
+function markdown(post, captured_at, media, replies = [], parent = null) {
   const title = post.text.split('\n').find((line) => line.trim())?.slice(0, 100) || post.code;
-  const fields = { title, url: post.url, author: post.author, source_type: 'threads', site: 'threads.com', published_at: post.published_at, captured_at, likes: post.likes, replies: post.replies, reposts: post.reposts, quotes: post.quotes, has_video: post.has_video };
-  let text = `---\n${Object.entries(fields).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n')}\n---\n\n${post.text}\n`;
+  const reply_to = post.reply_to ? (parent?.url || `@${post.reply_to.author}`) : undefined;
+  const custom_like = post.custom_like?.emoji || undefined;
+  const fields = { title, url: post.url, author: post.author, source_type: 'threads', site: 'threads.com', published_at: post.published_at, captured_at, likes: post.likes, replies: post.replies, reposts: post.reposts, quotes: post.quotes, has_video: post.has_video, reply_to, custom_like };
+  // Each [貼圖] marker becomes its downloaded sticker, in order.
+  const stickers = media.filter((m) => m.kind === 'sticker');
+  let n = 0;
+  const body = post.text.replace(/\[貼圖\]/g, () => { const m = stickers[n++]; return m && !m.error ? `![貼圖](${m.file})` : '[貼圖]'; });
+  let text = `---\n${Object.entries(fields).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n')}\n---\n\n${body}\n`;
   if (post.has_video && !media.some((m) => m.kind === 'video' && !m.error)) text += '\n（含影片，未下載；圖片為影片封面）\n';
   const line = (m) => {
     if (m.error) return `- 下載失敗：${m.url}（${m.error}）`;
+    if (m.kind === 'like') return `讚的按鈕換成這張貼圖：![自訂讚](${m.file})`;
     return m.kind === 'video' ? `[貼文影片](${m.file})` : `![貼文圖片](${m.file})`;
   };
-  if (media.length) text += `\n## 附件\n\n${media.map(line).join('\n\n')}\n`;
+  const listed = media.filter((m) => m.kind !== 'sticker' || m.error);
+  if (listed.length) text += `\n## 附件\n\n${listed.map(line).join('\n\n')}\n`;
+  if (parent) {
+    text += `\n## 回覆的原文\n\n這則是回在這篇底下的留言：[@${parent.author}](${parent.url})（讚 ${parent.likes ?? '?'}、回覆 ${parent.replies ?? '?'}${parent.images.length ? `、${parent.images.length} 張圖` : ''}）\n\n${parent.text}\n`;
+  }
   if (replies.length) {
     const one = (r) => `- @${r.author}（讚 ${r.likes ?? '?'}、回覆 ${r.replies ?? '?'}${r.images.length ? `、${r.images.length} 張圖` : ''}）：${r.text.replace(/\s*\n\s*/g, ' ')}`;
     text += `\n## 留言\n\n頁面上的順序，作者自己的接續段也在裡面。\n\n${replies.map(one).join('\n')}\n`;
@@ -212,11 +235,13 @@ async function saveMedia(dir, post, withVideo) {
   const tasks = [
     ...post.images.map((url, i) => ({ url, file: `assets/${i + 1}.jpg`, kind: 'image' })),
     ...(withVideo ? post.videos.map((url, i) => ({ url, file: `assets/video-${i + 1}.mp4`, kind: 'video' })) : []),
+    ...(post.stickers || []).map((url, i) => ({ url, file: `assets/sticker-${i + 1}.gif`, kind: 'sticker' })),
+    ...(post.custom_like?.gif ? [{ url: post.custom_like.gif, file: 'assets/like.gif', kind: 'like' }] : []),
   ];
   if (tasks.length) fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
   for (const task of tasks) {
     try {
-      if (!fs.existsSync(path.join(dir, task.file))) { await download(task.url, path.join(dir, task.file), task.kind); await sleep(randomMs(0.5, 1.5)); }
+      if (!fs.existsSync(path.join(dir, task.file))) { await download(task.url, path.join(dir, task.file), task.kind === 'video' ? 'video' : 'image'); await sleep(randomMs(0.5, 1.5)); }
       media.push(task);
     } catch (error) { if (/停止批次/.test(error.message)) throw error; media.push({ ...task, error: error.message }); }
   }
@@ -322,6 +347,7 @@ function joinThread(post, parts) {
   if (!parts.length) return post;
   return { ...post, text: [post.text, ...parts.map((p) => p.text)].filter(Boolean).join('\n\n'),
     images: [...post.images, ...parts.flatMap((p) => p.images)], videos: [...post.videos, ...parts.flatMap((p) => p.videos)],
+    stickers: [...post.stickers, ...parts.flatMap((p) => p.stickers)],
     has_video: post.has_video || parts.some((p) => p.has_video) };
 }
 
@@ -334,11 +360,13 @@ async function capturePost(page, { author, code, url }, limit, out, withVideo) {
   const captured_at = new Date().toISOString();
   const post = joinThread(posts.get(code), parts);
   const partCodes = new Set(parts.map((p) => p.code));
-  const replies = [...posts.values()].filter((p) => p.code !== code && !partCodes.has(p.code)).slice(0, limit);
+  // A reply's page also shows the post it answers, above it; that one is not a comment.
+  const parent = post.reply_to ? [...posts.values()].find((p) => p.pk === post.reply_to.pk) || null : null;
+  const replies = [...posts.values()].filter((p) => p.code !== code && !partCodes.has(p.code) && p !== parent).slice(0, limit);
   const dir = path.join(out, post.author.toLowerCase(), code);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'post.md'), markdown(post, captured_at, await saveMedia(dir, post, withVideo), replies));
-  log(`@${author}/${code}：${replies.length} 則留言，停止原因 ${reason} → ${dir}`);
+  fs.writeFileSync(path.join(dir, 'post.md'), markdown(post, captured_at, await saveMedia(dir, post, withVideo), replies, parent));
+  log(`@${author}/${code}：${parent ? `回在 @${parent.author}/${parent.code} 底下，` : ''}${replies.length} 則留言，停止原因 ${reason} → ${dir}`);
   console.log(dir);
 }
 
