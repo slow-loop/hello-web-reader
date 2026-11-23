@@ -144,6 +144,10 @@ async function main() {
     ...(args.shot ? {} : { recordVideo: { dir: videoDir, size: { width: args.width, height: args.height } } }),
   });
 
+  // PTT's 18+ boards (Gossiping …) put an age page first; it only sets this cookie (hello-video 2026-11-23: five
+  // episodes' agents could not shoot the post and showed nothing instead)
+  await context.addCookies([{ name: "over18", value: "1", domain: ".ptt.cc", path: "/" }]);
+
   if (args.opencli) {
     try {
       const { Page } = await import("/Users/cc/Developer/GitHub/OpenCLI/dist/src/browser/page.js");
