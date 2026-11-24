@@ -143,10 +143,10 @@ function collectPosts(roots, account, into = new Map()) {
       const t = o.text_post_app_info || {};
       const videos = [...new Set(items.map(video).filter(Boolean))];
       // Inline GIF stickers sit in the text as a placeholder character; rebuild the text from its
-      // fragments with a [貼圖] marker there, and keep the sticker URLs in the same order.
+      // fragments with a [inline_sticker] marker there, and keep the sticker URLs in the same order.
       const frags = t.text_fragments?.fragments || [];
       const stickers = frags.filter((f) => f?.fragment_type === 'inline_sticker').map((f) => f.inline_sticker_fragment?.sticker_url).filter(Boolean);
-      const text = stickers.length ? frags.map((f) => (f.fragment_type === 'inline_sticker' ? '[貼圖]' : f.plaintext || '')).join('') : o.caption?.text || '';
+      const text = stickers.length ? frags.map((f) => (f.fragment_type === 'inline_sticker' ? '[inline_sticker]' : f.plaintext || '')).join('') : o.caption?.text || '';
       const like = t.custom_like;
       into.set(o.code, {
         code: o.code, pk: o.pk != null ? String(o.pk) : null, author, url: `https://www.threads.com/@${author}/post/${o.code}`,
@@ -205,20 +205,21 @@ async function download(url, dest, kind = 'image') {
 function markdown(post, captured_at, media, replies = [], parent = null) {
   const title = post.text.split('\n').find((line) => line.trim())?.slice(0, 100) || post.code;
   const reply_to = post.reply_to ? (parent?.url || `@${post.reply_to.author}`) : undefined;
-  const custom_like = post.custom_like?.emoji || undefined;
+  // Threads' custom_like is not part of the text: the emoji, or the downloaded GIF's path.
+  const like = media.find((m) => m.kind === 'like' && !m.error);
+  const custom_like = post.custom_like?.emoji || like?.file || undefined;
   const fields = { title, url: post.url, author: post.author, source_type: 'threads', site: 'threads.com', published_at: post.published_at, captured_at, likes: post.likes, replies: post.replies, reposts: post.reposts, quotes: post.quotes, has_video: post.has_video, reply_to, custom_like };
-  // Each [貼圖] marker becomes its downloaded sticker, in order.
+  // Each [inline_sticker] marker becomes its downloaded sticker, in order.
   const stickers = media.filter((m) => m.kind === 'sticker');
   let n = 0;
-  const body = post.text.replace(/\[貼圖\]/g, () => { const m = stickers[n++]; return m && !m.error ? `![貼圖](${m.file})` : '[貼圖]'; });
+  const body = post.text.replace(/\[inline_sticker\]/g, () => { const m = stickers[n++]; return m && !m.error ? `![inline_sticker](${m.file})` : '[inline_sticker]'; });
   let text = `---\n${Object.entries(fields).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n')}\n---\n\n${body}\n`;
   if (post.has_video && !media.some((m) => m.kind === 'video' && !m.error)) text += '\n（含影片，未下載；圖片為影片封面）\n';
   const line = (m) => {
     if (m.error) return `- 下載失敗：${m.url}（${m.error}）`;
-    if (m.kind === 'like') return `讚的按鈕換成這張貼圖：![自訂讚](${m.file})`;
     return m.kind === 'video' ? `[貼文影片](${m.file})` : `![貼文圖片](${m.file})`;
   };
-  const listed = media.filter((m) => m.kind !== 'sticker' || m.error);
+  const listed = media.filter((m) => !['sticker', 'like'].includes(m.kind) || m.error);
   if (listed.length) text += `\n## 附件\n\n${listed.map(line).join('\n\n')}\n`;
   if (parent) {
     text += `\n## 回覆的原文\n\n這則是回在這篇底下的留言：[@${parent.author}](${parent.url})（讚 ${parent.likes ?? '?'}、回覆 ${parent.replies ?? '?'}${parent.images.length ? `、${parent.images.length} 張圖` : ''}）\n\n${parent.text}\n`;
