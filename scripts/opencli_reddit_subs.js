@@ -129,11 +129,18 @@ function opencliJson(args, label) {
   if (res.status !== 0) {
     throw new Error(`${label} failed: ${(res.stderr || res.stdout || '').trim()}`);
   }
+  let parsed;
   try {
-    return JSON.parse(res.stdout);
+    parsed = JSON.parse(res.stdout);
   } catch {
     throw new Error(`${label} returned invalid JSON: ${res.stdout.slice(0, 500)}`);
   }
+  // OpenCLI 2.x wraps output as { ok, data }; older versions printed the data itself.
+  if (parsed && !Array.isArray(parsed) && 'ok' in parsed && 'data' in parsed) {
+    if (!parsed.ok) throw new Error(`${label} failed: ${JSON.stringify(parsed).slice(0, 500)}`);
+    return parsed.data;
+  }
+  return parsed;
 }
 
 function readJson(filePath, fallback) {
