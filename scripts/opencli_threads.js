@@ -15,7 +15,8 @@
  *          <out>/<handle>/profile.json + avatar.jpg                    name, bio, followers, links, avatar
  * Search   <out>/_index/search-<query>-<stamp>.json                   every post read, any author; nothing downloaded
  * Home     <out>/_index/home-<stamp>.json                             same, from the logged-in "For you" feed
- * Post     <out>/<author>/<code>/post.md + assets/                    the post, its media, and up to --limit replies
+ * Post     <out>/<author>/<code>/post.md + assets/                    the post, its media, the --limit most-liked of 3× --limit replies read, and the author's own
+ *          <out>/<author>/<code>/comments.json                         those replies as data (author, likes, text, reply_to)
  * Search and home only index (text, counts, media URLs). Pick from the index, then pass the chosen
  * post URLs to save them: images are downloaded right away (Meta's CDN URLs expire); videos only
  * with --video, otherwise the cover image stands in.
@@ -226,7 +227,7 @@ function markdown(post, captured_at, media, replies = [], parent = null) {
   }
   if (replies.length) {
     const one = (r) => `- @${r.author}（讚 ${r.likes ?? '?'}、回覆 ${r.replies ?? '?'}${r.images.length ? `、${r.images.length} 張圖` : ''}）：${r.text.replace(/\s*\n\s*/g, ' ')}`;
-    text += `\n## 留言\n\n頁面上的順序，作者自己的接續段也在裡面。\n\n${replies.map(one).join('\n')}\n`;
+    text += `\n## 留言\n\n讚最多的幾則、作者自己回的和他回的那則，照頁面上的順序，作者自己的接續段也在裡面。\n\n${replies.map(one).join('\n')}\n`;
   }
   return text;
 }
@@ -356,17 +357,28 @@ function joinThread(post, parts) {
 async function capturePost(page, { author, code, url }, limit, out, withVideo) {
   const posts = collectPosts(await open(page, url), null);
   if (!posts.has(code)) throw new Error('頁面沒有這則貼文（已刪除、私人帳號或未登入）');
-  const reason = posts.size - 1 >= limit ? 'limit' : await loadMore(page, 'post', null, posts, limit + 1);
+  // Read 3× --limit replies, then keep the --limit with the most likes, every reply by the author,
+  // and the replies the author answered.
+  const read = limit * 3;
+  const reason = posts.size - 1 >= read ? 'limit' : await loadMore(page, 'post', null, posts, read + 1);
   const parts = await threadParts(page, posts.get(code));
   const captured_at = new Date().toISOString();
   const post = joinThread(posts.get(code), parts);
   const partCodes = new Set(parts.map((p) => p.code));
   // A reply's page also shows the post it answers, above it; that one is not a comment.
   const parent = post.reply_to ? [...posts.values()].find((p) => p.pk === post.reply_to.pk) || null : null;
-  const replies = [...posts.values()].filter((p) => p.code !== code && !partCodes.has(p.code) && p !== parent).slice(0, limit);
+  const all = [...posts.values()].filter((p) => p.code !== code && !partCodes.has(p.code) && p !== parent);
+  const top = new Set([...all].sort((a, b) => (b.likes ?? 0) - (a.likes ?? 0)).slice(0, limit));
+  const answered = new Set(all.filter((p) => p.author === post.author && p.reply_to).map((p) => p.reply_to.pk));
+  const replies = all.filter((p) => top.has(p) || p.author === post.author || answered.has(p.pk));
   const dir = path.join(out, post.author.toLowerCase(), code);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'post.md'), markdown(post, captured_at, await saveMedia(dir, post, withVideo), replies, parent));
+  // The same replies as data, in page order. reply_to.pk points at the reply it answers, when it is one.
+  writeJson(path.join(dir, 'comments.json'), { url: post.url, captured_at, comments: replies.map((r) => ({
+    url: r.url, pk: r.pk, author: r.author, published_at: r.published_at, likes: r.likes, replies: r.replies,
+    text: r.text, images: r.images, stickers: r.stickers, reply_to: r.reply_to,
+  })) });
   log(`@${author}/${code}：${parent ? `回在 @${parent.author}/${parent.code} 底下，` : ''}${replies.length} 則留言，停止原因 ${reason} → ${dir}`);
   console.log(dir);
 }
