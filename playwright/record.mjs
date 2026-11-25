@@ -32,7 +32,7 @@
 // --phone emulates a phone for real (430 css px wide unless --width says otherwise, dpr 2, an iPhone's user
 // agent, touch): a site that picks its layout by user agent or viewport gives its phone page, which CSS zoom
 // on a wide window does not get. --shot=<png> takes one still instead of a recording: --height css px from
-// the top (default 1800), and with --mark="<text>" (any number) <png>.marks.json, each text's line boxes
+// the top (default 1800; longer when a --mark is lower down: to 600 css px under it), and with --mark="<text>" (any number) <png>.marks.json, each text's line boxes
 // [x, y, w, h] in the still's pixels, read from the page's text itself. --hide="<css>" hides more before it.
 // --clean hides ads (iframes, ad/sponsor/taboola class names) and everything floating (chat avatars,
 // back-to-top, bottom bars, summary bars), kept up while the page scrolls since ads load late.
@@ -217,7 +217,11 @@ async function main() {
 
   if (args.clean) {
     await page.evaluate(() => {
-      const ad = /(^|[-_ ])(ad|ads|adv|advert|advertisement|sponsor|sponsored|taboola|trc|outbrain|dfp|gpt)([-_ 0-9]|$)/i;
+      const ad = /(^|[-_ ])(ad|ads|adv|advert|advertisement|sponsor|sponsored|taboola|trc|outbrain|dfp|gpt|popup|popupbanner)([-_ 0-9]|$)/i;
+      // camel-case ad slots (ETtoday's adM02, adJS03): "ad" then a capital or a digit, case kept
+      const adCamel = /(^|\s)ad[A-Z0-9]/;
+      // a picture served from an ad or banner folder (…/banners/122995-1.png) is an ad whatever its box is called
+      const adSrc = /\/(banners?|ads?|adv|adserver)\//i;
       // into shadow roots too: floating widgets (summary bars, chat buttons) often live in one
       const sweep = (root = document.body) => root.querySelectorAll("*").forEach((el) => {
         if (el.shadowRoot) sweep(el.shadowRoot);
@@ -225,7 +229,9 @@ async function main() {
         const cls = typeof el.className === "string" ? el.className : "";
         const pos = getComputedStyle(el).position;
         // !important: a site's own !important rule (a bar shown on scroll) would win over a plain inline style
-        if (el.matches("iframe, ins") || ad.test(el.id) || ad.test(cls) || pos === "fixed" || pos === "sticky") el.style.setProperty("display", "none", "important");
+        const adImg = el.tagName === "IMG" && adSrc.test(el.currentSrc || el.src || "");
+        if (el.matches("iframe, ins") || ad.test(el.id) || ad.test(cls) || adCamel.test(el.id) || adCamel.test(cls) || adImg || pos === "fixed" || pos === "sticky")
+          el.style.setProperty("display", "none", "important");
       });
       // every frame and on every change: the site brings its widgets back on each scroll
       const loop = () => { sweep(); requestAnimationFrame(loop); };
@@ -285,7 +291,13 @@ async function main() {
       return out;
     }, args.marks);
     const w = await page.evaluate(() => document.documentElement.clientWidth);
-    await page.screenshot({ path: args.shot, fullPage: true, clip: { x: 0, y: 0, width: w, height: args.height } });
+    // the still runs from the top down past the lowest marked line (600 css px under it), so a line below --height is
+    // not cut off; never past the page's own end
+    const lowest = Math.max(0, ...Object.values(boxes).flat().map(([, y, , bh]) => y + bh));
+    // some sites scroll the body, not the document (the Guardian's html reports only the window's height): the larger
+    const pageH = await page.evaluate(() => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight));
+    const height = Math.max(Math.min(pageH, Math.max(args.height, Math.ceil(lowest + 600))), Math.ceil(lowest + 20));
+    await page.screenshot({ path: args.shot, fullPage: true, clip: { x: 0, y: 0, width: w, height } });
     const pad = 4, d = args.dpr;
     const marks = Object.fromEntries(Object.entries(boxes).map(([q, ls]) => [q, ls.map(([x, y, bw, bh]) =>
       [Math.round(x * d - pad), Math.round(y * d - pad), Math.round(bw * d + 2 * pad), Math.round(bh * d + 2 * pad)])]));
