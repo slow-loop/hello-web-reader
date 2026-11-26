@@ -128,7 +128,11 @@ async function main() {
     if (!process.argv.some((a) => a.startsWith("--width="))) args.width = 430;
     if (!process.argv.some((a) => a.startsWith("--height="))) args.height = args.shot ? 1800 : 932;
     if (!process.argv.some((a) => a.startsWith("--dpr="))) args.dpr = 2;
-  } else if (args.shot && !process.argv.some((a) => a.startsWith("--height="))) args.height = 1800;
+  } else if (args.shot) {
+    // a desktop still: whole page as a desktop shows it, at twice the pixels so a push in on a line stays sharp
+    if (!process.argv.some((a) => a.startsWith("--height="))) args.height = 1800;
+    if (!process.argv.some((a) => a.startsWith("--dpr="))) args.dpr = 2;
+  }
   const videoDir = await mkdtemp(path.join(tmpdir(), "scroll-capture-"));
   const browser = await chromium.launch({ headless: args.headless });
   const context = await browser.newContext({
@@ -226,6 +230,8 @@ async function main() {
       const sweep = (root = document.body) => root.querySelectorAll("*").forEach((el) => {
         if (el.shadowRoot) sweep(el.shadowRoot);
         if (el.style.getPropertyPriority("display") === "important") return;
+        // never a box that holds the article itself (supertaste wraps the whole site in #ad-root): a heading or the text
+        if (el.querySelector("h1, article, main, [itemprop=articleBody]")) return;
         const cls = typeof el.className === "string" ? el.className : "";
         const pos = getComputedStyle(el).position;
         // !important: a site's own !important rule (a bar shown on scroll) would win over a plain inline style
@@ -260,21 +266,67 @@ async function main() {
   }
 
   if (args.shot) {
-    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+    // a page that scrolls inside a box instead of the window (stock.ltn.com.tw: html and body overflow hidden, the
+    // article in a 848 px box): the box and everything round it let out to their full height, so the page is one long page
+    await page.evaluate(() => {
+      const vh = window.innerHeight;
+      if (Math.max(document.documentElement.scrollHeight, document.body.scrollHeight) > vh + 50) return;
+      const box = [...document.querySelectorAll("body *")].filter((e) => /(auto|scroll)/.test(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 200)
+        .sort((a, b) => b.scrollHeight - a.scrollHeight)[0];
+      if (!box) return;
+      for (let e = box; e; e = e.parentElement) {
+        for (const [k, v] of [["overflow", "visible"], ["height", "auto"], ["max-height", "none"]]) e.style.setProperty(k, v, "important");
+      }
+    });
     await page.waitForTimeout(500);
+    const before = page.url();
+    // images that load only when scrolled to push the text down when they come in: scroll the whole page through first
+    // and wait for them, so the marks are measured where the text ends up (hello-video 2026-11-26: a lazy page's mark
+    // landed 2000 px off, on a photo)
+    await page.evaluate(async () => {
+      // only down the page as it first stands, and never on into a next story: an endless page (mirrormedia) loads the
+      // next article as you near the end and moves the address to it (hello-video 2026-11-26)
+      const H = () => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+      const end = Math.min(H(), 40000) - window.innerHeight * 1.5, here = location.href;
+      for (let y = 0; y < end && location.href === here; y += Math.round(window.innerHeight * 0.8)) {
+        window.scrollTo({ top: y, behavior: "instant" });
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      await Promise.race([
+        Promise.all([...document.images].filter((i) => !i.complete).map((i) => new Promise((r) => { i.onload = i.onerror = r; }))),
+        new Promise((r) => setTimeout(r, 5000)),
+      ]);
+      window.scrollTo({ top: 0, behavior: "instant" });
+    });
+    // an endless page moved on to its next story while scrolled: the story itself again, as it first came, unscrolled
+    if (page.url() !== before) {
+      console.log(`the page moved on to ${page.url()} while scrolled; loading ${before} again`);
+      await page.goto(before, { waitUntil: "domcontentloaded", timeout: 60000 });
+      await page.waitForTimeout(Math.max(3000, args.wait));
+    }
+    await page.waitForTimeout(800);
     // each text's line boxes, from the text itself (first occurrence that is on the page), in css px
-    const boxes = await page.evaluate((qs) => {
+    const measure = () => page.evaluate((qs) => {
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-      const nodes = [], starts = [];
+      // compared with no whitespace (a sentence the page breaks over two lines or two elements is still found) and as
+      // NFKC, one character for one (a site's compatibility ideographs, U+F900…, match the plain ones typed)
+      const plain = (c) => { const k = c.normalize("NFKC"); return k.length === c.length ? k : c; };
       let text = "";
-      for (let n; (n = walker.nextNode());) { starts.push(text.length); nodes.push(n); text += n.data; }
-      const at = (k) => { let i = starts.length - 1; while (starts[i] > k) i--; return [nodes[i], k - starts[i]]; };
+      const where = [];   // for each character of `text`: its text node and offset there
+      for (let n; (n = walker.nextNode());) {
+        for (let o = 0; o < n.data.length; o++) {
+          if (/\s/.test(n.data[o])) continue;
+          text += plain(n.data[o]);
+          where.push([n, o]);
+        }
+      }
       const out = {};
-      for (const q of qs) {
+      for (const q0 of qs) {
+        const q = [...q0.replace(/\s+/g, "")].map(plain).join("");
         for (let k = text.indexOf(q); k >= 0; k = text.indexOf(q, k + 1)) {
           const r = document.createRange();
-          r.setStart(...at(k));
-          const [en, eo] = at(k + q.length - 1);
+          r.setStart(...where[k]);
+          const [en, eo] = where[k + q.length - 1];
           r.setEnd(en, eo + 1);
           const rects = [...r.getClientRects()].filter((c) => c.width > 1 && c.height > 1);
           if (!rects.length) continue;
@@ -284,20 +336,35 @@ async function main() {
             if (l) { l.x = Math.min(l.x, c.left); l.x2 = Math.max(l.x2, c.right); l.b = Math.max(l.b, c.bottom); }
             else lines.push({ x: c.left, y: c.top, x2: c.right, b: c.bottom });
           }
-          out[q] = lines.map((l) => [l.x, l.y + window.scrollY, l.x2 - l.x, l.b - l.y]);
+          out[q0] = lines.map((l) => [l.x, l.y + window.scrollY, l.x2 - l.x, l.b - l.y]);
           break;
         }
       }
       return out;
     }, args.marks);
+    let boxes = await measure();
     const w = await page.evaluate(() => document.documentElement.clientWidth);
     // the still runs from the top down past the lowest marked line (600 css px under it), so a line below --height is
     // not cut off; never past the page's own end
-    const lowest = Math.max(0, ...Object.values(boxes).flat().map(([, y, , bh]) => y + bh));
+    const lowestOf = (bs) => Math.max(0, ...Object.values(bs).flat().map(([, y, , bh]) => y + bh));
+    const lowest = lowestOf(boxes);
     // some sites scroll the body, not the document (the Guardian's html reports only the window's height): the larger
     const pageH = await page.evaluate(() => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight));
-    const height = Math.max(Math.min(pageH, Math.max(args.height, Math.ceil(lowest + 600))), Math.ceil(lowest + 20));
+    const heightFor = (low) => Math.max(Math.min(pageH, Math.max(args.height, Math.ceil(low + 600))), Math.ceil(low + 20));
+    let height = heightFor(lowest);
     await page.screenshot({ path: args.shot, fullPage: true, clip: { x: 0, y: 0, width: w, height } });
+    // the page may still have moved while it was shot (a late image, a font): measured again, and if anything moved,
+    // shot again where it now is (twice at most)
+    for (let again = 0; again < 2; again++) {
+      const now = await measure();
+      const moved = Object.keys(now).some((q) => !boxes[q] || now[q].some((b, i) => !boxes[q][i] || Math.abs(b[1] - boxes[q][i][1]) > 2 || Math.abs(b[0] - boxes[q][i][0]) > 2));
+      if (!moved) break;
+      console.log(`marks moved while shooting; shooting again`);
+      boxes = now;
+      height = heightFor(lowestOf(boxes));
+      await page.waitForTimeout(1000);
+      await page.screenshot({ path: args.shot, fullPage: true, clip: { x: 0, y: 0, width: w, height } });
+    }
     const pad = 4, d = args.dpr;
     const marks = Object.fromEntries(Object.entries(boxes).map(([q, ls]) => [q, ls.map(([x, y, bw, bh]) =>
       [Math.round(x * d - pad), Math.round(y * d - pad), Math.round(bw * d + 2 * pad), Math.round(bh * d + 2 * pad)])]));
