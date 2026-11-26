@@ -16,7 +16,7 @@
  * Search   <out>/_index/search-<query>-<stamp>.json                   every post read, any author; nothing downloaded
  * Home     <out>/_index/home-<stamp>.json                             same, from the logged-in "For you" feed
  * Post     <out>/<author>/<code>/post.md + assets/                    the post, its media, the --limit most-liked of 3× --limit replies read, and the author's own
- *          <out>/<author>/<code>/comments.json                         those replies as data (author, likes, text, reply_to)
+ *          <out>/<author>/<code>/comments.json + comments/             those replies as data (author, likes, text, reply_to) and their images
  * Search and home only index (text, counts, media URLs). Pick from the index, then pass the chosen
  * post URLs to save them: images are downloaded right away (Meta's CDN URLs expire); videos only
  * with --video, otherwise the cover image stands in.
@@ -250,6 +250,25 @@ async function saveMedia(dir, post, withVideo) {
   return media;
 }
 
+// Comment images and GIF stickers go to comments/<code>-<n>.<ext> (the CDN URLs expire). Returns code -> files.
+async function saveCommentMedia(dir, replies) {
+  const files = {};
+  for (const r of replies) {
+    const tasks = [
+      ...r.images.map((url, i) => ({ url, file: `comments/${r.code}-${i + 1}.jpg` })),
+      ...(r.stickers || []).map((url, i) => ({ url, file: `comments/${r.code}-sticker-${i + 1}.gif` })),
+    ];
+    for (const task of tasks) {
+      try {
+        fs.mkdirSync(path.join(dir, 'comments'), { recursive: true });
+        if (!fs.existsSync(path.join(dir, task.file))) { await download(task.url, path.join(dir, task.file)); await sleep(randomMs(0.5, 1.5)); }
+        (files[r.code] ||= []).push(task.file);
+      } catch (error) { if (/停止批次/.test(error.message)) throw error; }
+    }
+  }
+  return files;
+}
+
 async function open(page, url) {
   await page.goto(url);
   await sleep(randomMs(3, 6));
@@ -374,10 +393,12 @@ async function capturePost(page, { author, code, url }, limit, out, withVideo) {
   const dir = path.join(out, post.author.toLowerCase(), code);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'post.md'), markdown(post, captured_at, await saveMedia(dir, post, withVideo), replies, parent));
-  // The same replies as data, in page order. reply_to.pk points at the reply it answers, when it is one.
+  // The same replies as data, in page order. reply_to.pk points at the reply it answers, when it is one;
+  // files are the downloaded images and stickers, relative to this folder.
+  const files = await saveCommentMedia(dir, replies);
   writeJson(path.join(dir, 'comments.json'), { url: post.url, captured_at, comments: replies.map((r) => ({
     url: r.url, pk: r.pk, author: r.author, published_at: r.published_at, likes: r.likes, replies: r.replies,
-    text: r.text, images: r.images, stickers: r.stickers, reply_to: r.reply_to,
+    text: r.text, files: files[r.code] || [], reply_to: r.reply_to,
   })) });
   log(`@${author}/${code}：${parent ? `回在 @${parent.author}/${parent.code} 底下，` : ''}${replies.length} 則留言，停止原因 ${reason} → ${dir}`);
   console.log(dir);
